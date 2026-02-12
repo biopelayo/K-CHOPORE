@@ -1,0 +1,5 @@
+filename_fastq	filename_fast5	read_id	run_id	channel	mux	start_time	duration	num_events	passes_filtering	template_start	num_events_template	template_duration	sequence_length_template	mean_qscore_template	strand_score_template
+FAR00002_def67890_0.fastq	FAR00002_def67890_0.fast5	read_101	def456	1	1	0.0	1.6	105	TRUE	0.1	100	1.5	111	12.8	0.87
+FAR00002_def67890_0.fastq	FAR00002_def67890_0.fast5	read_102	def456	2	1	1.0	1.9	125	TRUE	0.2	115	1.7	112	13.5	0.91
+FAR00002_def67890_0.fastq	FAR00002_def67890_0.fast5	read_103	def456	3	1	2.0	1.3	85	TRUE	0.1	80	1.2	112	12.0	0.89
+FAR00002_def67890_0.fastq	FAR00002_def67890_0.fast5	read_104	def456	4	1	3.0	1.1	75	TRUE	0.1	70	1.0	93	11.0	0.84

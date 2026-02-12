@@ -1,0 +1,7 @@
+Chr1	araport11	gene	1	600	.	+	.	gene_id "AT1G01010"; gene_name "NAC001";
+Chr1	araport11	transcript	1	600	.	+	.	gene_id "AT1G01010"; transcript_id "AT1G01010.1";
+Chr1	araport11	exon	1	120	.	+	.	gene_id "AT1G01010"; transcript_id "AT1G01010.1"; exon_number "1";
+Chr1	araport11	exon	181	600	.	+	.	gene_id "AT1G01010"; transcript_id "AT1G01010.1"; exon_number "2";
+Chr2	araport11	gene	1	300	.	+	.	gene_id "AT2G01010"; gene_name "TAS1";
+Chr2	araport11	transcript	1	300	.	+	.	gene_id "AT2G01010"; transcript_id "AT2G01010.1";
+Chr2	araport11	exon	1	300	.	+	.	gene_id "AT2G01010"; transcript_id "AT2G01010.1"; exon_number "1";

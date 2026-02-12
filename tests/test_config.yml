@@ -1,0 +1,112 @@
+# =============================================================
+# K-CHOPORE Test Configuration
+# Uses toy data for pipeline validation
+# =============================================================
+
+samples:
+  - "test_sample_1"
+  - "test_sample_2"
+
+conditions:
+  test_sample_1: "control"
+  test_sample_2: "treatment"
+
+input_files:
+  fastq_dir: "tests/toy_data/fastq"
+  fast5_dir: "tests/toy_data/fast5"
+  pod5_dir: "tests/toy_data/pod5"
+  sequencing_summaries_dir: "tests/toy_data/summaries"
+
+  fastq_files:
+    - "tests/toy_data/fastq/test_sample_1.fastq"
+    - "tests/toy_data/fastq/test_sample_2.fastq"
+  sequencing_summaries:
+    - "tests/toy_data/summaries/test_sample_1_sequencing_summary_FAR00001_abc12345.txt"
+    - "tests/toy_data/summaries/test_sample_2_sequencing_summary_FAR00002_def67890.txt"
+
+  reference_genome: "tests/toy_data/reference/toy_genome.fasta"
+  reference_genome_mmi: "tests/toy_data/reference/toy_genome.fasta.mmi"
+  gtf_file: "tests/toy_data/annotations/toy_annotation.gtf"
+  bed_file: "results/flair/flair.collapse.isoforms.bed"
+  transcriptome_fasta: "tests/toy_data/reference/transcriptome.fa"
+
+  reads_manifest: "tests/toy_data/reads_manifest.tsv"
+
+output:
+  path: "results"
+  logs: "logs"
+  basecalls_dir: "results/basecalls"
+  fastq_filtered_dir: "results/fastq_filtered"
+  mapped_dir: "results/mapped"
+  sorted_bam_dir: "results/sorted_bam"
+  qc_dir: "results/quality_analysis"
+  nanoplot_dir: "results/nanoplot"
+  nanocomp_dir: "results/nanocomp"
+  samtools_stats_dir: "results/samtools_stats"
+  flair_dir: "results/flair"
+  stringtie_dir: "results/stringtie"
+  bambu_dir: "results/bambu"
+  eligos2_dir: "results/eligos"
+  m6anet_dir: "results/m6anet"
+  xpore_dir: "results/xpore"
+  nanopolish_dir: "results/nanopolish"
+  deseq2_dir: "results/deseq2"
+  multiqc_dir: "results/multiqc"
+
+tools:
+  basecaller: "dorado"
+  guppy_config_file: "/opt/ont-guppy-cpu/data/rna_r9.4.1_70bps_hac.cfg"
+  bonito_model: "rna004_130bps_hac@v5.0.0"
+  dorado_model: "rna004_130bps_hac@v5.0.0"
+  dorado_path: "/usr/local/bin/dorado"
+
+  minimap2_preset: "splice"
+  minimap2_kmer_size: 14
+  minimap2_extra_flags: "--secondary=no --MD"
+
+  nanofilt_min_quality: 7
+  nanofilt_min_length: 50
+  nanofilt_max_length: 0
+
+  nanoplot_format: "png"
+  pycoqc_min_pass_qual: 7
+
+  flair_path: "flair"
+  flair_support: 1
+  flair_stringent: true
+
+  stringtie_path: "stringtie"
+  stringtie_min_cov: 2.5
+  stringtie_min_tpm: 1.0
+
+  eligos2_pval: 0.05
+  eligos2_oddR: 5
+  eligos2_esb: 0.2
+
+  m6anet_num_iterations: 100
+  m6anet_num_processors: 2
+
+  xpore_min_reads: 5
+
+  nanopolish_path: "nanopolish"
+
+  deseq2_padj_threshold: 0.05
+  deseq2_lfc_threshold: 1.0
+
+params:
+  threads: 2
+  latency_wait: 10
+
+  run_basecalling: false
+  run_nanofilt: true
+  run_nanoplot: true
+  run_nanocomp: true
+  run_pycoqc: true
+  run_flair: true
+  run_stringtie: false
+  run_bambu: false
+  run_eligos2: true
+  run_m6anet: true
+  run_xpore: false
+  run_deseq2: true
+  run_multiqc: true
