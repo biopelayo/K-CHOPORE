@@ -18,6 +18,11 @@ data/
 *.sam
 *.fastq
 
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Archivos de sistema y temporales
 .git_corrupt/
 envs/
