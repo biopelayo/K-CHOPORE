@@ -1,0 +1,47 @@
+# =============================================================
+# K-CHOPORE Python Dependencies
+# ONT Direct RNA Sequencing Analysis Pipeline
+# =============================================================
+# NOTE: Tools installed separately in Dockerfile (NanoPlot, NanoComp,
+# NanoFilt, m6anet, xpore, multiqc, flair-brookslab, pysam, pod5,
+# ont-fast5-api, pycoQC) are NOT duplicated here to avoid version conflicts.
+
+# Build tools (required for pybedtools compilation)
+setuptools>=69.0.0
+wheel
+Cython
+
+# Core scientific computing
+numpy>=1.23.5
+pandas>=2.0.0
+scipy>=1.10.0
+
+# BAM/SAM processing
+mappy>=2.24
+
+# FAST5/HDF5 file handling
+h5py>=3.11.0
+
+# Bed file manipulation
+pybedtools>=0.10.0
+ncls>=0.0.68
+
+# Visualization
+plotly>=4.1.0
+
+# Templating
+Jinja2>=3.1.4
+MarkupSafe>=2.1.5
+
+# Progress bars
+tqdm>=4.66.5
+
+# R-Python integration
+rpy2>=3.5.0
+
+# Utilities
+python-dateutil>=2.9.0
+pytz>=2024.1
+tzdata>=2024.1
+retrying>=1.3.4
+tabulate>=0.9.0

@@ -1,0 +1,148 @@
+# =============================================================
+# K-CHOPORE Configuration File
+# Pipeline for ONT Direct RNA Sequencing Analysis
+# =============================================================
+
+# -------------------------------------------------------------
+# SAMPLES - Define your samples here
+# Each sample needs a FASTQ, sequencing summary, and FAST5/POD5 dir
+# -------------------------------------------------------------
+samples:
+  - "WT_C_R1"
+  - "WT_C_R2"
+
+# Experimental groups for differential expression analysis
+conditions:
+  WT_C_R1: "control"
+  WT_C_R2: "control"
+  # Add treatment samples as needed, e.g.:
+  # MUT_T_R1: "treatment"
+  # MUT_T_R2: "treatment"
+
+# -------------------------------------------------------------
+# INPUT FILES AND DIRECTORIES
+# -------------------------------------------------------------
+input_files:
+  # Raw sequencing data
+  fastq_dir: "data/raw/fastq"
+  fast5_dir: "data/raw/fast5"
+  pod5_dir: "data/raw/pod5"               # Modern ONT format (POD5)
+  sequencing_summaries_dir: "data/raw/summaries"
+
+  # Per-sample FASTQ files (auto-derived from samples list if not specified)
+  fastq_files:
+    - "data/raw/fastq/WT_C_R1.fastq"
+    - "data/raw/fastq/WT_C_R2.fastq"
+  sequencing_summaries:
+    - "data/raw/summaries/WT_C_R1_sequencing_summary_FAR90122_d34138fc.txt"
+    - "data/raw/summaries/WT_C_R2_sequencing_summary_FAR91957_a56dafa5.txt"
+
+  # Reference genome and annotations
+  reference_genome: "data/reference/genome/TAIR10_chr_all.fas.fasta"
+  reference_genome_mmi: "data/reference/genome/TAIR10_chr_all.fas.fasta.mmi"
+  gtf_file: "data/reference/annotations/AtRTDv2_QUASI_19April2016.gtf"
+  bed_file: "results/flair/flair.collapse.isoforms.bed"
+  transcriptome_fasta: "data/reference/transcriptome/transcriptome.fa"  # For m6Anet/xPore
+
+  # FLAIR read manifest (TSV with sample, condition, batch, fastq path)
+  reads_manifest: "data/raw/reads_manifest.tsv"
+
+# -------------------------------------------------------------
+# OUTPUT SETTINGS
+# -------------------------------------------------------------
+output:
+  path: "results"
+  logs: "logs"
+  basecalls_dir: "results/basecalls"
+  fastq_filtered_dir: "results/fastq_filtered"       # NanoFilt output
+  mapped_dir: "results/mapped"
+  sorted_bam_dir: "results/sorted_bam"
+  qc_dir: "results/quality_analysis"
+  nanoplot_dir: "results/nanoplot"                     # NanoPlot QC reports
+  nanocomp_dir: "results/nanocomp"                     # NanoComp comparison
+  samtools_stats_dir: "results/samtools_stats"         # samtools flagstat/stats
+  flair_dir: "results/flair"
+  stringtie_dir: "results/stringtie"                   # StringTie2 isoforms
+  bambu_dir: "results/bambu"                           # Bambu isoforms
+  eligos2_dir: "results/eligos"
+  m6anet_dir: "results/m6anet"                         # m6Anet modification detection
+  xpore_dir: "results/xpore"                           # xPore differential modification
+  nanopolish_dir: "results/nanopolish"                 # Nanopolish eventalign
+  deseq2_dir: "results/deseq2"                         # DESeq2 differential expression
+  multiqc_dir: "results/multiqc"
+
+# -------------------------------------------------------------
+# TOOL CONFIGURATIONS
+# -------------------------------------------------------------
+tools:
+  # Basecalling
+  basecaller: "dorado"                                  # Options: guppy, bonito, dorado
+  guppy_config_file: "/opt/ont-guppy-cpu/data/rna_r9.4.1_70bps_hac.cfg"  # RNA config
+  bonito_model: "rna004_130bps_hac@v5.0.0"
+  dorado_model: "rna004_130bps_hac@v5.0.0"             # Direct RNA model for Dorado
+  dorado_path: "/usr/local/bin/dorado"
+
+  # Alignment - minimap2
+  minimap2_preset: "splice"                             # Use 'splice' for direct RNA-seq
+  minimap2_kmer_size: 14                                # -k 14 recommended for RNA
+  minimap2_extra_flags: "--secondary=no --MD"           # Additional minimap2 flags
+
+  # Read filtering - NanoFilt
+  nanofilt_min_quality: 7                               # Minimum quality score
+  nanofilt_min_length: 200                              # Minimum read length (bp)
+  nanofilt_max_length: 0                                # Maximum read length (0 = no limit)
+
+  # Quality control
+  nanoplot_format: "png"                                # Output plot format (png, svg, pdf)
+  pycoqc_min_pass_qual: 7                               # Min quality for pycoQC pass filter
+
+  # Isoform analysis - FLAIR
+  flair_path: "flair"                                   # FLAIR executable path
+  flair_support: 3                                      # Min supporting reads for collapse
+  flair_stringent: true                                 # Stringent mode for isoform calling
+
+  # Isoform analysis - StringTie2
+  stringtie_path: "stringtie"
+  stringtie_min_cov: 2.5                                # Minimum coverage for assembly
+  stringtie_min_tpm: 1.0                                # Min TPM for reporting
+
+  # RNA modification detection - ELIGOS2
+  eligos2_pval: 0.05
+  eligos2_oddR: 5
+  eligos2_esb: 0.2
+
+  # RNA modification detection - m6Anet
+  m6anet_num_iterations: 1000                           # Number of inference iterations
+  m6anet_num_processors: 4
+
+  # RNA modification detection - xPore
+  xpore_min_reads: 10                                   # Min reads per position
+
+  # Nanopolish
+  nanopolish_path: "nanopolish"
+
+  # Differential expression - DESeq2
+  deseq2_padj_threshold: 0.05                           # Adjusted p-value cutoff
+  deseq2_lfc_threshold: 1.0                             # Log2 fold change cutoff
+
+# -------------------------------------------------------------
+# ANALYSIS PARAMETERS
+# -------------------------------------------------------------
+params:
+  threads: 12
+  latency_wait: 30
+
+  # Pipeline modules to run (true/false)
+  run_basecalling: false                                # Set true if starting from FAST5/POD5
+  run_nanofilt: true                                    # Read quality filtering
+  run_nanoplot: true                                    # Read QC with NanoPlot
+  run_nanocomp: true                                    # Comparative QC across samples
+  run_pycoqc: true                                      # pycoQC report (needs seq summary)
+  run_flair: true                                       # FLAIR isoform analysis
+  run_stringtie: false                                  # StringTie2 isoform assembly
+  run_bambu: false                                      # Bambu isoform discovery
+  run_eligos2: true                                     # ELIGOS2 modification detection
+  run_m6anet: true                                      # m6Anet m6A detection
+  run_xpore: false                                      # xPore differential modification
+  run_deseq2: true                                      # DESeq2 differential expression
+  run_multiqc: true                                     # MultiQC aggregate report
