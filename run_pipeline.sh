@@ -132,23 +132,24 @@ mkdir -p "$DATA_DIR/results" "$DATA_DIR/logs"
 echo -e "${GREEN}Starting K-CHOPORE pipeline...${NC}"
 echo ""
 
-docker run -it --rm \
+LOGFILE="$DATA_DIR/logs/pipeline_run_$(date +%Y%m%d_%H%M%S).log"
+
+docker run --rm \
     -v "$DATA_DIR":/workspace \
-    -v "$DATA_DIR/data":/workspace/data \
     -w /workspace \
     "$IMAGE_NAME" \
     snakemake \
         --snakefile /workspace/Snakefile \
         --configfile /workspace/config/config.yml \
         --cores "$THREADS" \
-        --latency-wait 30 \
+        --latency-wait 60 \
         --printshellcmds \
         --reason \
         --keep-going \
         --rerun-incomplete \
-        2>&1 | tee "$DATA_DIR/logs/pipeline_run_$(date +%Y%m%d_%H%M%S).log"
+        > >(tee "$LOGFILE") 2>&1
 
-EXIT_CODE=${PIPESTATUS[0]}
+EXIT_CODE=$?
 
 echo ""
 if [ "$EXIT_CODE" -eq 0 ]; then

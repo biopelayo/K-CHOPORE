@@ -19,6 +19,11 @@ conditions:
   # MUT_T_R1: "treatment"
   # MUT_T_R2: "treatment"
 
+# Samples that have FAST5/signal data (needed for nanopolish/m6Anet/xPore)
+# If omitted, defaults to all samples
+samples_with_fast5:
+  - "WT_C_R2"
+
 # -------------------------------------------------------------
 # INPUT FILES AND DIRECTORIES
 # -------------------------------------------------------------
@@ -129,8 +134,8 @@ tools:
 # ANALYSIS PARAMETERS
 # -------------------------------------------------------------
 params:
-  threads: 12
-  latency_wait: 30
+  threads: 12                                      # Default; override with --cores in Snakemake
+  latency_wait: 60
 
   # Pipeline modules to run (true/false)
   run_basecalling: false                                # Set true if starting from FAST5/POD5
