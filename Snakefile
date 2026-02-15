@@ -22,6 +22,7 @@ configfile: "config/config.yml"
 # Global variables from config
 # -------------------------------------------------------------
 SAMPLES = config["samples"]
+SAMPLES_WITH_FAST5 = config.get("samples_with_fast5", SAMPLES)
 THREADS = config["params"]["threads"]
 
 # Reference files
@@ -56,6 +57,7 @@ print(f"[K-CHOPORE] Reference genome: {REFERENCE_GENOME}")
 print(f"[K-CHOPORE] Threads: {THREADS}")
 print(f"[K-CHOPORE] Minimap2 preset: {MINIMAP2_PRESET} (k={MINIMAP2_KMER})")
 print(f"[K-CHOPORE] Sequencing summaries: {SEQUENCING_SUMMARY}")
+print(f"[K-CHOPORE] Samples with FAST5: {SAMPLES_WITH_FAST5}")
 
 # -------------------------------------------------------------
 # Helper: collect conditional targets for the 'all' rule
@@ -129,10 +131,10 @@ def get_all_targets():
             expand("results/eligos/{sample}_eligos_output.txt", sample=SAMPLES)
         )
 
-    # m6Anet modification detection
+    # m6Anet modification detection (only for samples with FAST5)
     if config["params"].get("run_m6anet", True):
         targets.extend(
-            expand("results/m6anet/{sample}/data.result.csv.gz", sample=SAMPLES)
+            expand("results/m6anet/{sample}/data.result.csv.gz", sample=SAMPLES_WITH_FAST5)
         )
 
     # xPore differential modification
@@ -203,6 +205,7 @@ rule basecall_dorado:
         "logs/basecall_dorado_{sample}.log"
     shell:
         """
+        mkdir -p results/basecalls logs
         echo "[K-CHOPORE] Basecalling with Dorado for {wildcards.sample}..."
         {params.dorado} basecaller {params.model} \
             {input.pod5_dir}/{wildcards.sample}/ \
@@ -224,13 +227,14 @@ rule basecall_guppy:
         "logs/basecall_guppy_{sample}.log"
     shell:
         """
+        mkdir -p results/basecalls logs
         echo "[K-CHOPORE] Basecalling with Guppy for {wildcards.sample}..."
         guppy_basecaller \
             -i {input.fast5_dir}/{wildcards.sample}/ \
             -s results/basecalls/{wildcards.sample}_guppy/ \
             -c {params.guppy_cfg} \
             --num_callers {threads} \
-            --compress_fastq 2>&1 | tee {log}
+            --compress_fastq > {log} 2>&1
         cat results/basecalls/{wildcards.sample}_guppy/pass/*.fastq > {output.fastq}
         echo "[K-CHOPORE] Guppy basecalling completed for {wildcards.sample}."
         """
@@ -253,6 +257,7 @@ rule nanofilt:
         "logs/nanofilt_{sample}.log"
     shell:
         """
+        mkdir -p results/fastq_filtered logs
         echo "[K-CHOPORE] Filtering reads with NanoFilt for {wildcards.sample}..."
         max_len_flag=""
         if [ {params.max_len} -gt 0 ]; then
@@ -277,6 +282,7 @@ rule nanoplot:
         "logs/nanoplot_{sample}.log"
     shell:
         """
+        mkdir -p {params.outdir} logs
         echo "[K-CHOPORE] Running NanoPlot QC for {wildcards.sample}..."
         NanoPlot --fastq {input.fastq} \
             --outdir {params.outdir} \
@@ -284,7 +290,7 @@ rule nanoplot:
             --threads {threads} \
             --loglength \
             --title "{wildcards.sample} Read QC" \
-            --plots dot kde 2>&1 | tee {log}
+            --plots dot kde > {log} 2>&1
         echo "[K-CHOPORE] NanoPlot completed for {wildcards.sample}."
         """
 
@@ -302,12 +308,13 @@ rule nanocomp:
         "logs/nanocomp.log"
     shell:
         """
+        mkdir -p {params.outdir} logs
         echo "[K-CHOPORE] Running NanoComp across all samples..."
         NanoComp --fastq {input.fastqs} \
             --names {params.names} \
             --outdir {params.outdir} \
             --threads {threads} \
-            --plot violin 2>&1 | tee {log}
+            --plot violin > {log} 2>&1
         echo "[K-CHOPORE] NanoComp completed."
         """
 
@@ -326,8 +333,9 @@ rule index_genome:
         "logs/index_genome.log"
     shell:
         """
+        mkdir -p "$(dirname {output.reference_index})" logs
         echo "[K-CHOPORE] Indexing reference genome for splice-aware RNA alignment..."
-        minimap2 -d {output.reference_index} -k {k} {input.reference_genome} 2>&1 | tee {log}
+        minimap2 -d {output.reference_index} -k {k} {input.reference_genome} > {log} 2>&1
         echo "[K-CHOPORE] Genome indexing completed."
         """.replace("{k}", str(MINIMAP2_KMER))
 
@@ -349,6 +357,7 @@ rule map_with_minimap2:
         "logs/minimap2_{sample}.log"
     shell:
         """
+        mkdir -p results/mapped logs
         echo "[K-CHOPORE] Aligning {wildcards.sample} with Minimap2 (splice-aware, direct RNA)..."
         minimap2 -ax {params.preset} \
             -k {params.kmer} \
@@ -373,6 +382,7 @@ rule sort_and_index_bam:
         "logs/sort_index_{sample}.log"
     shell:
         """
+        mkdir -p results/sorted_bam logs
         echo "[K-CHOPORE] Sorting and indexing BAM for {wildcards.sample}..."
         samtools sort -@ {threads} -o {output.bam} {input.sam} 2> {log}
         samtools index -@ {threads} {output.bam} 2>> {log}
@@ -391,6 +401,7 @@ rule samtools_stats:
         "logs/samtools_stats_{sample}.log"
     shell:
         """
+        mkdir -p results/samtools_stats logs
         echo "[K-CHOPORE] Computing alignment statistics for {wildcards.sample}..."
         samtools flagstat {input.bam} > {output.flagstat} 2> {log}
         samtools stats {input.bam} > {output.stats} 2>> {log}
@@ -415,11 +426,12 @@ rule quality_analysis_with_pycoQC:
         "logs/pycoqc_{sample}.log"
     shell:
         """
+        mkdir -p results/quality_analysis logs
         echo "[K-CHOPORE] Running pycoQC for {wildcards.sample}..."
         pycoQC -f {input.summary} \
             -a {input.bam} \
             -o {output.html} \
-            --min_pass_qual {params.min_qual} 2>&1 | tee {log}
+            --min_pass_qual {params.min_qual} > {log} 2>&1
         echo "[K-CHOPORE] pycoQC completed for {wildcards.sample}."
         """
 
@@ -433,7 +445,7 @@ rule flair_align:
         genome=REFERENCE_GENOME,
         fastq="results/fastq_filtered/{sample}_filtered.fastq"
     output:
-        bed="results/flair/{sample}_flair.aligned.bed"
+        bed="results/flair/{sample}_flair.bed"
     params:
         outprefix="results/flair/{sample}_flair"
     threads: THREADS
@@ -441,20 +453,21 @@ rule flair_align:
         "logs/flair_align_{sample}.log"
     shell:
         """
+        mkdir -p results/flair logs
         echo "[K-CHOPORE] Running FLAIR align for {wildcards.sample}..."
         flair align \
             -g {input.genome} \
             -r {input.fastq} \
             -o {params.outprefix} \
             --threads {threads} \
-            --nvrna 2>&1 | tee {log}
+            --nvrna > {log} 2>&1
         echo "[K-CHOPORE] FLAIR align completed for {wildcards.sample}."
         """
 
 # Rule: FLAIR correct
 rule flair_correct:
     input:
-        bed="results/flair/{sample}_flair.aligned.bed",
+        bed="results/flair/{sample}_flair.bed",
         genome=REFERENCE_GENOME,
         gtf=GTF_FILE
     output:
@@ -466,13 +479,26 @@ rule flair_correct:
         "logs/flair_correct_{sample}.log"
     shell:
         """
+        mkdir -p results/flair logs
         echo "[K-CHOPORE] Running FLAIR correct for {wildcards.sample}..."
+        # Rename BED chromosome names to match GTF convention (1->Chr1, etc.)
+        sed -e 's/^1\t/Chr1\t/' -e 's/^2\t/Chr2\t/' -e 's/^3\t/Chr3\t/' \
+            -e 's/^4\t/Chr4\t/' -e 's/^5\t/Chr5\t/' \
+            -e 's/^mitochondria\t/ChrM\t/' -e 's/^chloroplast\t/ChrC\t/' \
+            {input.bed} > results/flair/{wildcards.sample}_flair_renamed.bed
+        # Create renamed genome FASTA matching GTF chromosome names
+        if [ ! -f results/flair/genome_renamed.fasta ]; then
+            sed -e 's/^>1 />Chr1 /' -e 's/^>2 />Chr2 /' -e 's/^>3 />Chr3 /' \
+                -e 's/^>4 />Chr4 /' -e 's/^>5 />Chr5 /' \
+                -e 's/^>mitochondria />ChrM /' -e 's/^>chloroplast />ChrC /' \
+                {input.genome} > results/flair/genome_renamed.fasta
+        fi
         flair correct \
-            -q {input.bed} \
-            -g {input.genome} \
+            -q results/flair/{wildcards.sample}_flair_renamed.bed \
+            -g results/flair/genome_renamed.fasta \
             -f {input.gtf} \
             -o {params.outprefix} \
-            --threads {threads} 2>&1 | tee {log}
+            --threads {threads} > {log} 2>&1
         echo "[K-CHOPORE] FLAIR correct completed for {wildcards.sample}."
         """
 
@@ -495,15 +521,16 @@ rule flair_collapse:
         "logs/flair_collapse_{sample}.log"
     shell:
         """
+        mkdir -p results/flair logs
         echo "[K-CHOPORE] Running FLAIR collapse for {wildcards.sample}..."
         flair collapse \
-            -g {input.genome} \
+            -g results/flair/genome_renamed.fasta \
             -r {input.fastq} \
             -q {input.corrected_bed} \
             -f {input.gtf} \
             -o {params.outprefix} \
             -s {params.support} \
-            --threads {threads} 2>&1 | tee {log}
+            --threads {threads} > {log} 2>&1
         echo "[K-CHOPORE] FLAIR collapse completed for {wildcards.sample}."
         """
 
@@ -520,13 +547,14 @@ rule flair_quantify:
         "logs/flair_quantify.log"
     shell:
         """
+        mkdir -p results/flair logs
         echo "[K-CHOPORE] Quantifying isoforms with FLAIR..."
         flair quantify \
             -r {input.reads_manifest} \
             -i {input.isoforms_fa[0]} \
             --tpm \
             --threads {params.threads} \
-            -o results/flair/counts_matrix 2>&1 | tee {log}
+            -o results/flair/counts_matrix > {log} 2>&1
         echo "[K-CHOPORE] FLAIR quantification completed."
         """
 
@@ -542,10 +570,11 @@ rule flair_diff_exp:
         "logs/flair_diffexp.log"
     shell:
         """
+        mkdir -p {params.out_dir} logs
         echo "[K-CHOPORE] Running FLAIR differential expression..."
         flair diffExp \
             -q {input.counts_matrix} \
-            -o {params.out_dir} 2>&1 | tee {log}
+            -o {params.out_dir} > {log} 2>&1
         echo "[K-CHOPORE] FLAIR diffExp completed."
         """
 
@@ -562,11 +591,12 @@ rule flair_diff_splice:
         "logs/flair_diffsplice.log"
     shell:
         """
+        mkdir -p results/flair/diffSplice logs
         echo "[K-CHOPORE] Running FLAIR differential splicing..."
         flair diffSplice \
             -i {input.isoforms_bed} \
             -q {input.counts_matrix} \
-            --test 2>&1 | tee {log}
+            --test > {log} 2>&1
         echo "[K-CHOPORE] FLAIR diffSplice completed."
         """
 
@@ -589,6 +619,7 @@ rule stringtie_assemble:
         "logs/stringtie_{sample}.log"
     shell:
         """
+        mkdir -p results/stringtie logs
         echo "[K-CHOPORE] Running StringTie2 for {wildcards.sample}..."
         stringtie {input.bam} \
             -G {input.gtf} \
@@ -596,7 +627,7 @@ rule stringtie_assemble:
             -p {threads} \
             -L \
             -c {params.min_cov} \
-            -A results/stringtie/{wildcards.sample}_gene_abund.tab 2>&1 | tee {log}
+            -A results/stringtie/{wildcards.sample}_gene_abund.tab > {log} 2>&1
         echo "[K-CHOPORE] StringTie2 completed for {wildcards.sample}."
         """
 
@@ -622,6 +653,7 @@ rule run_eligos2:
         "logs/eligos2_{sample}.log"
     shell:
         """
+        mkdir -p {params.outdir} results/eligos logs
         echo "[K-CHOPORE] Running ELIGOS2 for {wildcards.sample}..."
         eligos2 rna_mod \
             -i {input.bam} \
@@ -631,7 +663,7 @@ rule run_eligos2:
             --pval {params.pval} \
             --oddR {params.oddR} \
             --esb {params.esb} \
-            --threads {threads} 2>&1 | tee {log}
+            --threads {threads} > {log} 2>&1
         # Collect main output
         cp {params.outdir}/*_baseExt0.txt {output.eligos_output} 2>/dev/null || \
             touch {output.eligos_output}
@@ -653,10 +685,11 @@ rule nanopolish_index:
         "logs/nanopolish_index_{sample}.log"
     shell:
         """
+        mkdir -p results/nanopolish logs
         echo "[K-CHOPORE] Indexing FAST5 for Nanopolish ({wildcards.sample})..."
         nanopolish index \
             -d {input.fast5_dir}/{wildcards.sample}/ \
-            {input.fastq} 2>&1 | tee {log}
+            {input.fastq} > {log} 2>&1
         echo "[K-CHOPORE] Nanopolish indexing completed for {wildcards.sample}."
         """
 
@@ -675,6 +708,7 @@ rule nanopolish_eventalign:
         "logs/nanopolish_eventalign_{sample}.log"
     shell:
         """
+        mkdir -p results/nanopolish logs
         echo "[K-CHOPORE] Running Nanopolish eventalign for {wildcards.sample}..."
         nanopolish eventalign \
             --reads {input.fastq} \
@@ -700,11 +734,12 @@ rule m6anet_dataprep:
         "logs/m6anet_dataprep_{sample}.log"
     shell:
         """
+        mkdir -p {params.outdir} logs
         echo "[K-CHOPORE] Running m6Anet dataprep for {wildcards.sample}..."
         m6anet dataprep \
             --eventalign {input.eventalign} \
             --out_dir {params.outdir} \
-            --n_processes {threads} 2>&1 | tee {log}
+            --n_processes {threads} > {log} 2>&1
         echo "[K-CHOPORE] m6Anet dataprep completed for {wildcards.sample}."
         """
 
@@ -723,12 +758,13 @@ rule m6anet_inference:
         "logs/m6anet_inference_{sample}.log"
     shell:
         """
+        mkdir -p {params.outdir} logs
         echo "[K-CHOPORE] Running m6Anet inference for {wildcards.sample}..."
         m6anet inference \
             --input_dir {params.indir} \
             --out_dir {params.outdir} \
             --n_processes {params.n_proc} \
-            --num_iterations {params.n_iters} 2>&1 | tee {log}
+            --num_iterations {params.n_iters} > {log} 2>&1
         echo "[K-CHOPORE] m6Anet inference completed for {wildcards.sample}."
         """
 
@@ -750,6 +786,7 @@ rule xpore_diffmod:
         "logs/xpore_diffmod.log"
     shell:
         """
+        mkdir -p {params.outdir} logs
         echo "[K-CHOPORE] Running xPore differential modification analysis..."
         # xPore requires a YAML config - generate it
         cat > results/xpore/xpore_config.yml << 'XPORE_EOF'
@@ -758,7 +795,7 @@ out: {params.outdir}
 XPORE_EOF
         xpore diffmod \
             --config results/xpore/xpore_config.yml \
-            --n_processes {threads} 2>&1 | tee {log}
+            --n_processes {threads} > {log} 2>&1
         echo "[K-CHOPORE] xPore analysis completed."
         """
 
@@ -781,12 +818,13 @@ rule run_deseq2:
         "logs/deseq2.log"
     shell:
         """
+        mkdir -p {params.outdir} logs
         echo "[K-CHOPORE] Running DESeq2 differential expression analysis..."
         Rscript scripts/run_deseq2.R \
             {input.counts} \
             {params.outdir} \
             {params.padj} \
-            {params.lfc} 2>&1 | tee {log}
+            {params.lfc} > {log} 2>&1
         echo "[K-CHOPORE] DESeq2 analysis completed."
         """
 
@@ -808,10 +846,11 @@ rule multiqc:
         "logs/multiqc.log"
     shell:
         """
+        mkdir -p {params.outdir} logs
         echo "[K-CHOPORE] Aggregating QC reports with MultiQC..."
         multiqc results/ \
             -o {params.outdir} \
             --force \
-            --title "K-CHOPORE QC Report" 2>&1 | tee {log}
+            --title "K-CHOPORE QC Report" > {log} 2>&1
         echo "[K-CHOPORE] MultiQC report generated."
         """

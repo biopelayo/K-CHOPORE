@@ -92,14 +92,19 @@ RUN wget http://ccb.jhu.edu/software/stringtie/dl/stringtie-2.2.1.Linux_x86_64.t
 # ==============================================================
 # 8. Nanopolish (signal-level analysis for m6Anet/xPore)
 # ==============================================================
-# Nanopolish - install via prebuilt binary or pip
-# Note: compilation from source can fail; use conda/pip approach
-RUN pip install --no-cache-dir nanopolish || \
-    (git clone --recursive https://github.com/jts/nanopolish.git /opt/nanopolish && \
-     cd /opt/nanopolish && \
-     make -j$(nproc) && \
-     ln -s /opt/nanopolish/nanopolish /usr/local/bin/nanopolish) || \
-    echo "[K-CHOPORE] WARNING: Nanopolish installation failed. m6Anet/xPore signal-level features will require manual installation."
+# Nanopolish must be compiled from source (no pip package available)
+# Use serial build (-j1) to avoid race conditions between HDF5/eigen
+# downloads and source compilation
+RUN git clone --recursive https://github.com/jts/nanopolish.git /opt/nanopolish && \
+    cd /opt/nanopolish && \
+    make -j1 && \
+    ln -s /opt/nanopolish/nanopolish /usr/local/bin/nanopolish && \
+    ln -s /opt/nanopolish/scripts/nanopolish_makerange.py /usr/local/bin/nanopolish_makerange.py
+
+# VBZ compression plugin for HDF5 (required to read VBZ-compressed FAST5 files)
+# The plugin is already bundled with Guppy at /opt/ont-guppy-cpu/lib/
+# Point HDF5_PLUGIN_PATH there so nanopolish (and its bundled HDF5) can find it
+ENV HDF5_PLUGIN_PATH="/opt/ont-guppy-cpu/lib"
 
 # ==============================================================
 # 9. Python package manager and Snakemake
@@ -137,7 +142,10 @@ RUN pip install --no-cache-dir \
 
 # pycoQC installed with --no-deps to avoid plotly version conflict
 # (NanoPlot requires plotly>=6.1.1, pycoQC pins plotly==4.1.0)
-RUN pip install --no-cache-dir --no-deps pycoQC
+# setuptools must be reinstalled after NanoPlot (which may remove it)
+# because pycoQC imports pkg_resources at runtime
+RUN pip install --no-cache-dir setuptools && \
+    pip install --no-cache-dir --no-deps pycoQC
 
 # ==============================================================
 # 13. m6Anet (m6A modification detection from nanopore signal)
@@ -154,7 +162,15 @@ RUN pip install --no-cache-dir xpore || \
     pip install --no-cache-dir --no-deps xpore
 
 # ==============================================================
-# 15. MultiQC (aggregate QC report)
+# 15. ELIGOS2 (RNA modification detection from error signatures)
+# ==============================================================
+RUN git clone https://gitlab.com/piroonj/eligos2.git /home/eligos2 && \
+    cd /home/eligos2 && \
+    pip install --no-cache-dir -r requirements.txt 2>/dev/null || true && \
+    chmod +x /home/eligos2/Scripts/*.py 2>/dev/null || true
+
+# ==============================================================
+# 16. MultiQC (aggregate QC report)
 # ==============================================================
 RUN pip install --no-cache-dir multiqc
 
@@ -202,7 +218,13 @@ RUN mkdir -p /workspace/data/raw/fastq /workspace/data/raw/fast5 \
     /workspace/data/reference/transcriptome
 
 # ==============================================================
-# 21. Environment configuration
+# 21. Fix setuptools for pycoQC (pkg_resources removed in v71+)
+# ==============================================================
+# Must be the LAST pip install to prevent later packages upgrading it
+RUN pip install --no-cache-dir "setuptools<71"
+
+# ==============================================================
+# 22. Environment configuration
 # ==============================================================
 ENV PYTHONPATH="/usr/local/lib/python3.10/dist-packages"
 ENV PATH="/home/eligos2:/home/eligos2/Scripts:$PATH"
