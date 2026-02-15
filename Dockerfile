@@ -14,6 +14,9 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Ensure 'python' command exists (many tools use #!/usr/bin/env python)
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
 LABEL maintainer="pelayovic"
 LABEL description="K-CHOPORE: ONT Direct RNA-seq Analysis Pipeline"
 
