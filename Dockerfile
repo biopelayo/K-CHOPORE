@@ -168,33 +168,13 @@ RUN pip install --no-cache-dir xpore || \
 # ==============================================================
 # 15. ELIGOS2 (RNA modification detection from error signatures)
 # ==============================================================
+COPY scripts/fix_eligos2.py /tmp/fix_eligos2.py
 RUN git clone https://gitlab.com/piroonj/eligos2.git /home/eligos2 && \
     cd /home/eligos2 && \
     pip install --no-cache-dir -r requirements.txt 2>/dev/null || true && \
     chmod +x /home/eligos2/Scripts/*.py 2>/dev/null || true && \
-    # Fix rpy2 DeprecationWarning in pandas2ri.activate() (rpy2 >= 3.6) \
-    # All calls in _rna_mod.py and _eligos_func.py (both top-level and inside functions) \
-    python3 -c "
-for f in ['/home/eligos2/_rna_mod.py', '/home/eligos2/_eligos_func.py']:
-    with open(f) as fh:
-        lines = fh.readlines()
-    new_lines = []
-    for line in lines:
-        stripped = line.rstrip('\n')
-        if 'pandas2ri.activate()' in stripped and 'try:' not in stripped and 'except' not in stripped:
-            indent = len(stripped) - len(stripped.lstrip())
-            spaces = ' ' * indent
-            new_lines.append(spaces + 'try:\n')
-            new_lines.append(spaces + '    pandas2ri.activate()\n')
-            new_lines.append(spaces + 'except (DeprecationWarning, Exception):\n')
-            new_lines.append(spaces + '    pass\n')
-        else:
-            new_lines.append(line)
-    with open(f, 'w') as fh:
-        fh.writelines(new_lines)
-" && \
-    # Fix BED merge losing strand column (ELIGOS2 bug with BED12 input) \
-    sed -i "s/mergedBed = beds.sort().merge(s=True,c='4',o='distinct')/mergedBed = beds.sort().merge(s=True,c='6,4',o='distinct,distinct')/" /home/eligos2/_misc.py
+    # Fix rpy2 DeprecationWarning + BED merge strand column bug \
+    python3 /tmp/fix_eligos2.py
 
 # ==============================================================
 # 16. MultiQC (aggregate QC report)
