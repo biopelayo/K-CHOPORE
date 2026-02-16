@@ -41,6 +41,12 @@ FAST5_SAMPLES = [s for s in SAMPLE_IDS if SAMPLE_SHEET[s]["data_type"] == "fast5
 # Pre-basecalled samples have fast5_pass/, FAST5-only samples have fast5/
 SAMPLES_WITH_FAST5 = SAMPLE_IDS  # All samples have FAST5 on NAS
 
+# m6Anet requires FAST5 data on disk (~55 GB per sample).
+# Since total FAST5 is ~644 GB and server has ~234 GB free,
+# m6Anet is run separately per-sample (use: snakemake results/m6anet/SAMPLE/data.site_proba.csv)
+# Set RUN_M6ANET=True to include in main pipeline (only if FAST5 data is available locally)
+RUN_M6ANET = config.get("params", {}).get("run_m6anet", False)
+
 # Helper functions
 def get_raw_fastq_dirs(sample):
     """Return list of local paths to fastq_pass directories."""
@@ -113,8 +119,9 @@ rule all:
         "results/flair/counts_matrix.tsv",
         # ELIGOS2 modification detection
         expand("results/eligos/{sample}_eligos_output.txt", sample=SAMPLE_IDS),
-        # m6Anet modification detection
-        expand("results/m6anet/{sample}/data.site_proba.csv", sample=SAMPLE_IDS),
+        # m6Anet modification detection (optional - requires FAST5 data on disk)
+        # Run per-sample: snakemake results/m6anet/SAMPLE/data.site_proba.csv
+        expand("results/m6anet/{sample}/data.site_proba.csv", sample=SAMPLE_IDS) if RUN_M6ANET else [],
         # DESeq2 differential expression (2x2 factorial)
         "results/deseq2/deseq2_genotype_results.csv",
         "results/deseq2/deseq2_treatment_results.csv",

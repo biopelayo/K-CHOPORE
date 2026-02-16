@@ -2,49 +2,32 @@
 # ==============================================================
 # K-CHOPORE Pipeline Launcher
 # ==============================================================
-# Runs the full K-CHOPORE pipeline inside Docker with NAS mount
-# for reading FAST5 data directly from the Synology NAS.
+# Runs the full K-CHOPORE pipeline inside Docker.
+# Data is downloaded from NAS to local data/raw/ before running.
 #
 # USAGE:
-#   ./run_pipeline.sh <data_dir> <nas_mount> [threads]
+#   ./run_pipeline.sh [threads]
 #
 # ARGUMENTS:
-#   data_dir:   Path to K-CHOPORE project data directory
-#   nas_mount:  Path where NAS is mounted via SSHFS (e.g., /mnt/nas)
-#   threads:    Number of CPU cores (default: 40)
+#   threads:  Number of CPU cores (default: 40)
 #
 # EXAMPLE:
-#   # First mount the NAS (one-time setup):
-#   ./scripts/setup_nas_mount.sh usuario valmeilab.synology.me \
-#       /HTData_and_DBs/NGS/Nanopore/2022_Arabidopsis_AA_anac017_DRS
+#   ./run_pipeline.sh 40
 #
-#   # Then launch the pipeline:
-#   ./run_pipeline.sh /home/usuario2/K-CHOPORE /mnt/nas 40
-#
-# DATA DIRECTORY MUST CONTAIN:
-#   data/
-#   └── reference/
-#       ├── genome/
-#       │   └── TAIR10_chr_all.fas.fasta
-#       └── annotations/
-#           └── AtRTDv2_QUASI_19April2016.gtf
-#
-# NAS MOUNT MUST CONTAIN (read-only via SSHFS):
-#   WT_C_R1/        WT_C_R2/        WT_C_R3/
-#   WT_AA_R1/       WT_AA_R2/       WT_AA_R3/       WT_AA_R3_2/
-#   anac017-1_C_R1/ anac017-1_C_R2/ anac017-1_C_R3/
-#   anac017-1_AA_R1/ anac017-1_AA_R2/ anac017-1_AA_R3/ anac017_AA_R2-2/
-#
-# OUTPUT (created in data_dir):
-#   results/basecalls/    - Guppy basecalled FASTQs
-#   results/filtered/     - NanoFilt quality-filtered reads
-#   results/qc/           - NanoPlot, pycoQC reports
-#   results/mapped/       - Minimap2 BAM alignments
-#   results/flair/        - Isoform analysis
-#   results/eligos2/      - RNA modification calls
-#   results/m6anet/       - m6A modification predictions
-#   results/deseq2/       - Factorial differential expression
-#   results/multiqc/      - Aggregated QC report
+# EXPECTED DIRECTORY STRUCTURE:
+#   /home/usuario2/pelamovic/kchopore/
+#   ├── Snakefile
+#   ├── config/config.yml
+#   ├── scripts/run_deseq2.R
+#   ├── data/
+#   │   ├── raw/            ← Downloaded from NAS
+#   │   │   ├── WT_C_R1/    (fastq_pass/ + sequencing_summary)
+#   │   │   ├── WT_C_R2/    ...
+#   │   │   └── ...
+#   │   └── reference/
+#   │       ├── genome/TAIR10_chr_all.fas.fasta
+#   │       └── annotations/AtRTDv2_QUASI_19April2016.gtf
+#   └── results/             ← Pipeline outputs
 # ==============================================================
 
 set -euo pipefail
@@ -57,29 +40,9 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Parse arguments
-DATA_DIR="${1:-}"
-NAS_MOUNT="${2:-}"
-THREADS="${3:-40}"
+THREADS="${1:-40}"
 IMAGE_NAME="k-chopore:latest"
-
-if [ -z "$DATA_DIR" ] || [ -z "$NAS_MOUNT" ]; then
-    echo -e "${RED}ERROR: Missing required arguments.${NC}"
-    echo ""
-    echo "Usage: $0 <data_dir> <nas_mount> [threads]"
-    echo ""
-    echo "Arguments:"
-    echo "  data_dir:   Path to K-CHOPORE project data"
-    echo "  nas_mount:  Path where NAS is SSHFS-mounted (e.g., /mnt/nas)"
-    echo "  threads:    CPU cores (default: 40)"
-    echo ""
-    echo "Example:"
-    echo "  $0 /home/usuario2/K-CHOPORE /mnt/nas 40"
-    exit 1
-fi
-
-# Convert Windows paths if needed (Git Bash / WSL)
-DATA_DIR=$(echo "$DATA_DIR" | sed 's|\\|/|g')
-NAS_MOUNT=$(echo "$NAS_MOUNT" | sed 's|\\|/|g')
+DATA_DIR="/home/usuario2/pelamovic/kchopore"
 
 echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN} K-CHOPORE Pipeline Launcher${NC}"
@@ -87,7 +50,6 @@ echo -e "${GREEN} 12 Samples | 2x2 Factorial Design${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
 echo -e "Data directory: ${CYAN}$DATA_DIR${NC}"
-echo -e "NAS mount:      ${CYAN}$NAS_MOUNT${NC}"
 echo -e "Threads:        ${CYAN}$THREADS${NC}"
 echo -e "Docker image:   ${CYAN}$IMAGE_NAME${NC}"
 echo ""
@@ -95,25 +57,6 @@ echo ""
 # -------------------------------------------------------------
 # Preflight checks
 # -------------------------------------------------------------
-
-# Check data directory
-if [ ! -d "$DATA_DIR" ]; then
-    echo -e "${RED}ERROR: Data directory not found: $DATA_DIR${NC}"
-    exit 1
-fi
-
-# Check NAS mount
-if [ ! -d "$NAS_MOUNT" ]; then
-    echo -e "${RED}ERROR: NAS mount point not found: $NAS_MOUNT${NC}"
-    echo "Run scripts/setup_nas_mount.sh first to mount the NAS."
-    exit 1
-fi
-
-if ! mountpoint -q "$NAS_MOUNT" 2>/dev/null; then
-    echo -e "${YELLOW}WARNING: $NAS_MOUNT does not appear to be a mount point.${NC}"
-    echo "If the NAS is mounted at a parent directory, this may still work."
-    echo ""
-fi
 
 # Check Docker image
 if ! docker image inspect "$IMAGE_NAME" > /dev/null 2>&1; then
@@ -136,16 +79,7 @@ check_file() {
     fi
 }
 
-check_nas_dir() {
-    if [ ! -d "$NAS_MOUNT/$1" ]; then
-        echo -e "  ${RED}MISSING${NC}: NAS:$1/"
-        MISSING=1
-    else
-        echo -e "  ${GREEN}OK${NC}: NAS:$1/"
-    fi
-}
-
-# Reference files (on local disk)
+# Reference files
 check_file "data/reference/genome/TAIR10_chr_all.fas.fasta"
 check_file "data/reference/annotations/AtRTDv2_QUASI_19April2016.gtf"
 
@@ -154,29 +88,41 @@ check_file "Snakefile"
 check_file "config/config.yml"
 check_file "scripts/run_deseq2.R"
 
-# FAST5 folders on NAS
+# Check raw data directories
 echo ""
-echo "Checking FAST5 folders on NAS..."
-NAS_DIRS=(
+echo "Checking raw data (downloaded from NAS)..."
+RAW_DIRS=(
     "WT_C_R1" "WT_C_R2" "WT_C_R3"
-    "WT_AA_R1" "WT_AA_R2" "WT_AA_R3" "WT_AA_R3_2"
+    "WT_AA_R1" "WT_AA_R2" "WT_AA_R3"
     "anac017-1_C_R1" "anac017-1_C_R2" "anac017-1_C_R3"
-    "anac017-1_AA_R1" "anac017-1_AA_R2" "anac017-1_AA_R3"
-    "anac017_AA_R2-2"
+    "anac017-1_AA_R1"
 )
+FAST5_DIRS=("anac017-1_AA_R2" "anac017-1_AA_R3" "anac017_AA_R2-2")
 
-for dir in "${NAS_DIRS[@]}"; do
-    check_nas_dir "$dir"
+for dir in "${RAW_DIRS[@]}"; do
+    if [ -d "$DATA_DIR/data/raw/$dir" ]; then
+        SIZE=$(du -sh "$DATA_DIR/data/raw/$dir" 2>/dev/null | cut -f1)
+        echo -e "  ${GREEN}OK${NC}: data/raw/$dir/ ($SIZE)"
+    else
+        echo -e "  ${RED}MISSING: data/raw/$dir/${NC}"
+        MISSING=1
+    fi
+done
+
+for dir in "${FAST5_DIRS[@]}"; do
+    if [ -d "$DATA_DIR/data/raw/$dir" ]; then
+        SIZE=$(du -sh "$DATA_DIR/data/raw/$dir" 2>/dev/null | cut -f1)
+        echo -e "  ${GREEN}OK${NC}: data/raw/$dir/ ($SIZE) [FAST5-only]"
+    else
+        echo -e "  ${YELLOW}MISSING: data/raw/$dir/ (FAST5-only, needs basecalling)${NC}"
+    fi
 done
 
 echo ""
 if [ "$MISSING" -eq 1 ]; then
-    echo -e "${RED}Some required files or directories are missing!${NC}"
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    echo -e "${YELLOW}Some data directories are missing.${NC}"
+    echo "Transfer data with: python scripts/transfer_fastq_to_server.py"
+    echo ""
 fi
 
 # Report disk space
@@ -207,7 +153,6 @@ echo ""
 docker run --rm \
     --name k-chopore-run \
     -v "$DATA_DIR":/workspace \
-    -v "$NAS_MOUNT":/nas:ro \
     -w /workspace \
     "$IMAGE_NAME" \
     snakemake \
@@ -235,9 +180,12 @@ if [ "$EXIT_CODE" -eq 0 ]; then
     echo "Key outputs:"
     echo "  results/deseq2/  - Differential expression (3 contrasts)"
     echo "  results/flair/   - Isoform analysis"
-    echo "  results/eligos2/ - RNA modifications"
-    echo "  results/m6anet/  - m6A predictions"
+    echo "  results/eligos/  - RNA modifications (ELIGOS2)"
     echo "  results/multiqc/ - Aggregated QC report"
+    echo ""
+    echo "For m6Anet (requires FAST5 data on disk, ~55 GB/sample):"
+    echo "  Transfer FAST5 for one sample, then run:"
+    echo "  snakemake results/m6anet/SAMPLE/data.site_proba.csv --cores $THREADS"
 else
     echo -e "${RED}============================================${NC}"
     echo -e "${RED} Pipeline finished with errors (exit: $EXIT_CODE)${NC}"
@@ -249,7 +197,7 @@ else
     echo "  tail -50 $LOGFILE"
     echo ""
     echo "To resume from where it stopped:"
-    echo "  $0 $DATA_DIR $NAS_MOUNT $THREADS"
+    echo "  $0 $THREADS"
 fi
 
 exit $EXIT_CODE

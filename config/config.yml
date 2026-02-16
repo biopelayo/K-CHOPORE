@@ -167,3 +167,7 @@ tools:
 params:
   threads: 40
   latency_wait: 60
+  # m6Anet requires FAST5 data (~644 GB total, won't fit on 234 GB SSD)
+  # Set to true only when FAST5 data is available on local disk
+  # Alternatively, run per-sample: snakemake results/m6anet/SAMPLE_ID/data.site_proba.csv
+  run_m6anet: false

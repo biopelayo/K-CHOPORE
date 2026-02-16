@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""
+K-CHOPORE: Transfer pre-basecalled FASTQs + summaries from NAS to server.
+Routes: NAS API -> Windows (temp) -> SCP -> Server
+
+Only transfers fastq_pass/*.fastq.gz and sequencing_summary_*.txt
+for the 11 pre-basecalled samples. The 3 FAST5-only samples are
+handled separately.
+
+Usage: python scripts/transfer_fastq_to_server.py [start_index]
+"""
+import os
+import sys
+import json
+import subprocess
+import urllib.request
+import urllib.parse
+import ssl
+import time
+import shutil
+import tempfile
+
+# Configuration
+NAS_HOST = "valmeilab.synology.me"
+NAS_PORT = "5001"
+NAS_USER = "pelayo"
+NAS_PASS = "Pelamovic39@"
+NAS_BASE = "/HTData_and_DBs/NGS/Nanopore/2022_Arabidopsis_AA_anac017_DRS"
+
+SERVER = "usuario2@156.35.42.17"
+SERVER_BASE = "/home/usuario2/pelamovic/kchopore/data/raw"
+
+LOCAL_TEMP = os.path.join(tempfile.gettempdir(), "kchopore_transfer")
+
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+# All 14 samples with their data type
+ALL_SAMPLES = [
+    # (nas_dir, run_subdir, data_type)
+    ("WT_C_R1", "no_sample/20220224_1639_MC-112869_FAR90122_f656439d", "fastq"),
+    ("WT_C_R2", "no_sample/20220323_1648_MC-112869_FAR91957_0263d5a0", "fastq"),
+    ("WT_C_R3", "no_sample/20220301_1656_MC-112869_FAR90189_a35665b9", "fastq"),
+    ("WT_AA_R1", "20220221_1734_MC-112869_FAR92050_00e32dc0", "fastq"),
+    ("WT_AA_R2", "no_sample/20220316_1902_MC-112869_FAR91120_624c5f7d", "fastq"),
+    ("WT_AA_R3", "no_sample/20220315_1614_MC-112869_FAR90098_c891954b", "fastq"),
+    ("WT_AA_R3_2", "no_sample/20220316_1636_MC-112869_FAR90098_6e408c50", "fastq"),
+    ("anac017-1_C_R1", "no_sample/20220330_1936_MC-112869_FAR92015_6ac8671e", "fastq"),
+    ("anac017-1_C_R2", "no_sample/20220404_1440_MC-112869_FAR91811_a135af49", "fastq"),
+    ("anac017-1_C_R3", "no_sample/20220405_1610_MC-112869_FAR91811_d5fba51e", "fastq"),
+    ("anac017-1_AA_R1", "no_sample/20220328_1730_MC-112869_FAR90074_970aa1f5", "fastq"),
+    ("anac017-1_AA_R2", "no_sample/20220930_1148_MC-112869_FAR81498_9fdc7765", "fast5"),
+    ("anac017-1_AA_R3", "no_sample/20220929_1527_MC-112869_FAU09642_5f85f08b", "fast5"),
+    ("anac017_AA_R2-2", "no_sample/20221215_1232_MC-112869_FAT21048_d754e27f", "fast5"),
+]
+
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def nas_login():
+    params = urllib.parse.urlencode({
+        "api": "SYNO.API.Auth", "version": "6", "method": "login",
+        "account": NAS_USER, "passwd": NAS_PASS, "format": "sid",
+    })
+    url = f"https://{NAS_HOST}:{NAS_PORT}/webapi/auth.cgi?{params}"
+    with urllib.request.urlopen(urllib.request.Request(url), context=ctx, timeout=30) as resp:
+        result = json.loads(resp.read())
+    if not result.get("success"):
+        raise Exception(f"NAS login failed: {result}")
+    return result["data"]["sid"]
+
+
+def nas_list_files(folder_path, sid, limit=500, offset=0):
+    params = urllib.parse.urlencode({
+        "api": "SYNO.FileStation.List", "version": "2", "method": "list",
+        "folder_path": folder_path, "additional": '["size"]',
+        "offset": str(offset), "limit": str(limit), "_sid": sid,
+    }, safe='[]')
+    url = f"https://{NAS_HOST}:{NAS_PORT}/webapi/entry.cgi?{params}"
+    with urllib.request.urlopen(urllib.request.Request(url), context=ctx, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
+def nas_list_all_files(folder_path, sid):
+    all_files = []
+    offset = 0
+    total = None
+    while total is None or offset < total:
+        data = nas_list_files(folder_path, sid, limit=500, offset=offset)
+        if not data.get("success"):
+            log(f"  WARNING: List failed for {folder_path}: {data}")
+            break
+        total = data["data"]["total"]
+        for f in data["data"]["files"]:
+            if not f["isdir"]:
+                all_files.append({
+                    "path": f["path"],
+                    "name": f["name"],
+                    "size": f["additional"]["size"],
+                })
+        offset += 500
+    return all_files
+
+
+def nas_download_file(nas_path, local_path, sid):
+    encoded = urllib.parse.quote(nas_path, safe="")
+    url = (f"https://{NAS_HOST}:{NAS_PORT}/webapi/entry.cgi?"
+           f"api=SYNO.FileStation.Download&version=2&method=download"
+           f"&path={encoded}&mode=download&_sid={sid}")
+    with urllib.request.urlopen(urllib.request.Request(url), context=ctx, timeout=300) as resp:
+        with open(local_path, 'wb') as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+
+def scp_to_server(local_dir, server_dir):
+    subprocess.run(
+        ["ssh", "-o", "ConnectTimeout=30", SERVER, f"mkdir -p '{server_dir}'"],
+        capture_output=True, timeout=60
+    )
+    result = subprocess.run(
+        ["scp", "-r", "-o", "ConnectTimeout=30", "-q",
+         local_dir, f"{SERVER}:{server_dir}/"],
+        capture_output=True, text=True, timeout=7200
+    )
+    if result.returncode != 0:
+        log(f"  SCP stderr: {result.stderr[:200]}")
+    return result.returncode == 0
+
+
+def transfer_fastq_sample(nas_dir, run_subdir, sid):
+    """Transfer fastq_pass + sequencing_summary for one pre-basecalled sample."""
+    nas_run = f"{NAS_BASE}/{nas_dir}/{run_subdir}"
+    local_sample = os.path.join(LOCAL_TEMP, nas_dir, run_subdir)
+
+    # Download fastq_pass
+    fastq_folder = f"{nas_run}/fastq_pass"
+    local_fastq = os.path.join(local_sample, "fastq_pass")
+    os.makedirs(local_fastq, exist_ok=True)
+
+    log(f"  Listing fastq_pass...")
+    files = nas_list_all_files(fastq_folder, sid)
+    log(f"  Found {len(files)} FASTQ files")
+
+    total_bytes = 0
+    for i, f in enumerate(files, 1):
+        local_path = os.path.join(local_fastq, f["name"])
+        if os.path.exists(local_path) and os.path.getsize(local_path) == f["size"]:
+            total_bytes += f["size"]
+            continue
+
+        if i == 1 or i % 50 == 0 or i == len(files):
+            mb = f["size"] / (1024*1024)
+            log(f"  Downloading [{i}/{len(files)}] {f['name']} ({mb:.1f} MB)")
+
+        try:
+            nas_download_file(f["path"], local_path, sid)
+            total_bytes += f["size"]
+        except Exception as e:
+            log(f"  ERROR downloading {f['name']}: {e}")
+
+    # Download sequencing_summary
+    log(f"  Downloading sequencing_summary...")
+    os.makedirs(local_sample, exist_ok=True)
+    run_files = nas_list_all_files(nas_run, sid)
+    summary_count = 0
+    for f in run_files:
+        if "sequencing_summary" in f["name"]:
+            local_path = os.path.join(local_sample, f["name"])
+            mb = f["size"] / (1024*1024)
+            log(f"  Summary: {f['name']} ({mb:.1f} MB)")
+            try:
+                nas_download_file(f["path"], local_path, sid)
+                total_bytes += f["size"]
+                summary_count += 1
+            except Exception as e:
+                log(f"  ERROR downloading summary: {e}")
+
+    gb = total_bytes / (1024**3)
+    log(f"  Downloaded {len(files)} FASTQs + {summary_count} summaries ({gb:.2f} GB)")
+
+    # Upload to server
+    server_dest = f"{SERVER_BASE}/{nas_dir}"
+    log(f"  Uploading to server: {server_dest}")
+    local_nas_dir = os.path.join(LOCAL_TEMP, nas_dir)
+    success = scp_to_server(local_nas_dir, SERVER_BASE)
+    if success:
+        log(f"  Upload complete!")
+    else:
+        log(f"  WARNING: Upload may have had issues.")
+
+    # Clean local temp
+    shutil.rmtree(local_nas_dir, ignore_errors=True)
+    log(f"  Local temp cleaned.")
+    return len(files), total_bytes
+
+
+def transfer_fast5_sample(nas_dir, run_subdir, sid):
+    """Transfer fast5/ + sequencing_summary for one FAST5-only sample."""
+    nas_run = f"{NAS_BASE}/{nas_dir}/{run_subdir}"
+    local_sample = os.path.join(LOCAL_TEMP, nas_dir, run_subdir)
+
+    # Download fast5
+    fast5_folder = f"{nas_run}/fast5"
+    local_fast5 = os.path.join(local_sample, "fast5")
+    os.makedirs(local_fast5, exist_ok=True)
+
+    log(f"  Listing fast5...")
+    files = nas_list_all_files(fast5_folder, sid)
+    log(f"  Found {len(files)} FAST5 files")
+
+    total_bytes = 0
+    for i, f in enumerate(files, 1):
+        local_path = os.path.join(local_fast5, f["name"])
+        if os.path.exists(local_path) and os.path.getsize(local_path) == f["size"]:
+            total_bytes += f["size"]
+            continue
+
+        if i == 1 or i % 20 == 0 or i == len(files):
+            mb = f["size"] / (1024*1024)
+            log(f"  Downloading [{i}/{len(files)}] {f['name']} ({mb:.1f} MB)")
+
+        try:
+            nas_download_file(f["path"], local_path, sid)
+            total_bytes += f["size"]
+        except Exception as e:
+            log(f"  ERROR downloading {f['name']}: {e}")
+
+    # Download sequencing_summary
+    log(f"  Downloading sequencing_summary...")
+    os.makedirs(local_sample, exist_ok=True)
+    run_files = nas_list_all_files(nas_run, sid)
+    for f in run_files:
+        if "sequencing_summary" in f["name"]:
+            local_path = os.path.join(local_sample, f["name"])
+            mb = f["size"] / (1024*1024)
+            log(f"  Summary: {f['name']} ({mb:.1f} MB)")
+            try:
+                nas_download_file(f["path"], local_path, sid)
+                total_bytes += f["size"]
+            except Exception as e:
+                log(f"  ERROR downloading summary: {e}")
+
+    gb = total_bytes / (1024**3)
+    log(f"  Downloaded {len(files)} files ({gb:.2f} GB)")
+
+    # Upload to server
+    server_dest = f"{SERVER_BASE}/{nas_dir}"
+    log(f"  Uploading to server: {server_dest}")
+    local_nas_dir = os.path.join(LOCAL_TEMP, nas_dir)
+    success = scp_to_server(local_nas_dir, SERVER_BASE)
+    if success:
+        log(f"  Upload complete!")
+    else:
+        log(f"  WARNING: Upload may have had issues.")
+
+    shutil.rmtree(local_nas_dir, ignore_errors=True)
+    log(f"  Local temp cleaned.")
+    return len(files), total_bytes
+
+
+def main():
+    start_idx = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+
+    print("=" * 60, flush=True)
+    print(" K-CHOPORE Data Transfer: NAS -> Windows -> Server", flush=True)
+    print(f" Local temp: {LOCAL_TEMP}", flush=True)
+    print("=" * 60, flush=True)
+    print(flush=True)
+
+    os.makedirs(LOCAL_TEMP, exist_ok=True)
+
+    log("Logging in to NAS...")
+    sid = nas_login()
+    log("Session established.")
+    print(flush=True)
+
+    grand_files = 0
+    grand_bytes = 0
+
+    for i, (nas_dir, run_subdir, data_type) in enumerate(ALL_SAMPLES):
+        if i < start_idx:
+            log(f"[{i+1}/{len(ALL_SAMPLES)}] SKIPPED {nas_dir}")
+            continue
+
+        log(f"[{i+1}/{len(ALL_SAMPLES)}] {nas_dir} ({data_type})")
+
+        # Re-login every 3 samples
+        if i > 0 and i % 3 == 0:
+            log("  Refreshing NAS session...")
+            try:
+                sid = nas_login()
+            except:
+                time.sleep(5)
+                sid = nas_login()
+
+        try:
+            if data_type == "fastq":
+                nf, nb = transfer_fastq_sample(nas_dir, run_subdir, sid)
+            else:
+                nf, nb = transfer_fast5_sample(nas_dir, run_subdir, sid)
+            grand_files += nf
+            grand_bytes += nb
+        except Exception as e:
+            log(f"  FAILED: {e}")
+            log(f"  Resume with: python scripts/transfer_fastq_to_server.py {i}")
+
+        print(flush=True)
+
+    grand_gb = grand_bytes / (1024**3)
+    print("=" * 60, flush=True)
+    log(f"TRANSFER COMPLETE: {grand_files} files, {grand_gb:.2f} GB")
+    print("=" * 60, flush=True)
+
+    # Verify on server
+    log("Checking server:")
+    result = subprocess.run(
+        ["ssh", "-o", "ConnectTimeout=30", SERVER,
+         f"du -sh {SERVER_BASE}/*/ 2>/dev/null; echo '---'; df -h /"],
+        capture_output=True, text=True, timeout=30
+    )
+    print(result.stdout, flush=True)
+
+
+if __name__ == "__main__":
+    main()
