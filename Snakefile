@@ -2,8 +2,8 @@
 # K-CHOPORE Pipeline - Snakemake Workflow
 # =============================================================
 # ONT Direct RNA Sequencing analysis pipeline:
-# FAST5 basecalling -> QC -> alignment -> isoforms ->
-# epitranscriptomic modifications -> differential expression
+# pre-basecalled FASTQ / FAST5 basecalling -> QC -> alignment ->
+# isoforms -> epitranscriptomic modifications -> differential expression
 #
 # Created by Pelayo Gonzalez de Lena Rodriguez, MSc
 # FPI Severo Ochoa Fellow
@@ -21,22 +21,58 @@ configfile: "config/config.yml"
 SAMPLE_SHEET = config["samples"]
 SAMPLE_IDS = list(SAMPLE_SHEET.keys())
 THREADS = config["params"]["threads"]
+RAW_DATA_DIR = config["input_files"]["raw_data_dir"]
 
 # Reference files
 REFERENCE_GENOME = config["input_files"]["reference_genome"]
 REFERENCE_INDEX = config["input_files"]["reference_genome_mmi"]
 GTF_FILE = config["input_files"]["gtf_file"]
-NAS_MOUNT = config["input_files"]["nas_mount"]
 
 # Tool settings
 MINIMAP2_PRESET = config["tools"]["minimap2_preset"]
 MINIMAP2_KMER = config["tools"]["minimap2_kmer_size"]
 MINIMAP2_EXTRA = config["tools"]["minimap2_extra_flags"]
 
+# Classify samples by data type
+FASTQ_SAMPLES = [s for s in SAMPLE_IDS if SAMPLE_SHEET[s]["data_type"] == "fastq"]
+FAST5_SAMPLES = [s for s in SAMPLE_IDS if SAMPLE_SHEET[s]["data_type"] == "fast5"]
+
+# Samples with FAST5 data available (for signal-level analysis)
+# Pre-basecalled samples have fast5_pass/, FAST5-only samples have fast5/
+SAMPLES_WITH_FAST5 = SAMPLE_IDS  # All samples have FAST5 on NAS
+
 # Helper functions
-def get_fast5_dirs(sample):
-    """Return list of FAST5 directory paths on NAS for a sample."""
-    return [os.path.join(NAS_MOUNT, d) for d in SAMPLE_SHEET[sample]["fast5_dirs"]]
+def get_raw_fastq_dirs(sample):
+    """Return list of local paths to fastq_pass directories."""
+    dirs = []
+    nas_dirs = SAMPLE_SHEET[sample]["nas_dirs"]
+    run_subdirs = SAMPLE_SHEET[sample]["run_subdirs"]
+    for nas_dir, run_subdir in zip(nas_dirs, run_subdirs):
+        dirs.append(os.path.join(RAW_DATA_DIR, nas_dir, run_subdir, "fastq_pass"))
+    return dirs
+
+def get_raw_fast5_dirs(sample):
+    """Return list of local paths to FAST5 directories."""
+    dirs = []
+    nas_dirs = SAMPLE_SHEET[sample]["nas_dirs"]
+    run_subdirs = SAMPLE_SHEET[sample]["run_subdirs"]
+    for nas_dir, run_subdir in zip(nas_dirs, run_subdirs):
+        # Pre-basecalled samples have fast5_pass/, FAST5-only have fast5/
+        if SAMPLE_SHEET[sample]["data_type"] == "fastq":
+            dirs.append(os.path.join(RAW_DATA_DIR, nas_dir, run_subdir, "fast5_pass"))
+        else:
+            dirs.append(os.path.join(RAW_DATA_DIR, nas_dir, run_subdir, "fast5"))
+    return dirs
+
+def get_raw_summary_files(sample):
+    """Return list of local paths to sequencing_summary files."""
+    files = []
+    nas_dirs = SAMPLE_SHEET[sample]["nas_dirs"]
+    run_subdirs = SAMPLE_SHEET[sample]["run_subdirs"]
+    for nas_dir, run_subdir in zip(nas_dirs, run_subdirs):
+        summary_dir = os.path.join(RAW_DATA_DIR, nas_dir, run_subdir)
+        files.append(summary_dir)
+    return files
 
 def get_genotype(sample):
     return SAMPLE_SHEET[sample]["genotype"]
@@ -46,8 +82,10 @@ def get_treatment(sample):
 
 # Print configuration
 print(f"[K-CHOPORE] Samples ({len(SAMPLE_IDS)}): {SAMPLE_IDS}")
+print(f"[K-CHOPORE]   Pre-basecalled (FASTQ): {FASTQ_SAMPLES}")
+print(f"[K-CHOPORE]   Need basecalling (FAST5): {FAST5_SAMPLES}")
 print(f"[K-CHOPORE] Reference: {REFERENCE_GENOME}")
-print(f"[K-CHOPORE] NAS mount: {NAS_MOUNT}")
+print(f"[K-CHOPORE] Raw data: {RAW_DATA_DIR}")
 print(f"[K-CHOPORE] Threads: {THREADS}")
 
 # =============================================================
@@ -57,7 +95,7 @@ rule all:
     input:
         # Genome index
         REFERENCE_INDEX,
-        # Basecalled FASTQs
+        # Merged FASTQs and summaries
         expand("results/basecalls/{sample}.fastq", sample=SAMPLE_IDS),
         expand("results/basecalls/{sample}_sequencing_summary.txt", sample=SAMPLE_IDS),
         # Filtered reads
@@ -75,7 +113,7 @@ rule all:
         "results/flair/counts_matrix.tsv",
         # ELIGOS2 modification detection
         expand("results/eligos/{sample}_eligos_output.txt", sample=SAMPLE_IDS),
-        # m6Anet modification detection (all samples have FAST5)
+        # m6Anet modification detection
         expand("results/m6anet/{sample}/data.site_proba.csv", sample=SAMPLE_IDS),
         # DESeq2 differential expression (2x2 factorial)
         "results/deseq2/deseq2_genotype_results.csv",
@@ -85,64 +123,113 @@ rule all:
         "results/multiqc/multiqc_report.html",
 
 # =============================================================
-# BASECALLING - Guppy (FAST5 -> FASTQ)
+# PREPARE READS - Merge pre-basecalled FASTQs
 # =============================================================
+# For samples with pre-basecalled data (data_type: "fastq"):
+#   Decompress and concatenate all *.fastq.gz from fastq_pass/
+# For samples needing basecalling (data_type: "fast5"):
+#   Run Guppy basecaller on FAST5 data
 
-rule basecall_guppy:
+rule prepare_fastq:
+    """Merge pre-basecalled gzipped FASTQs into a single FASTQ per sample."""
     output:
         fastq="results/basecalls/{sample}.fastq",
         summary="results/basecalls/{sample}_sequencing_summary.txt"
     params:
+        fastq_dirs=lambda wildcards: get_raw_fastq_dirs(wildcards.sample),
+        summary_dirs=lambda wildcards: get_raw_summary_files(wildcards.sample),
+        data_type=lambda wildcards: SAMPLE_SHEET[wildcards.sample]["data_type"],
         guppy_cfg=config["tools"]["guppy_config_file"],
-        fast5_dirs=lambda wildcards: get_fast5_dirs(wildcards.sample),
+        fast5_dirs=lambda wildcards: get_raw_fast5_dirs(wildcards.sample),
         tmpdir="results/basecalls/tmp_{sample}"
     threads: THREADS
     log:
-        "logs/basecall_guppy_{sample}.log"
+        "logs/prepare_reads_{sample}.log"
     shell:
         """
-        mkdir -p {params.tmpdir} results/basecalls logs
+        mkdir -p results/basecalls logs
 
-        echo "[K-CHOPORE] Basecalling {wildcards.sample} with Guppy..."
-        echo "[K-CHOPORE] FAST5 directories: {params.fast5_dirs}"
+        if [ "{params.data_type}" = "fastq" ]; then
+            # =====================================================
+            # PRE-BASECALLED: decompress and concatenate FASTQs
+            # =====================================================
+            echo "[K-CHOPORE] Merging pre-basecalled FASTQs for {wildcards.sample}..."
 
-        # Basecall each FAST5 directory (handles merged re-runs)
-        dir_count=0
-        for fast5_dir in {params.fast5_dirs}; do
-            dir_count=$((dir_count + 1))
-            outdir="{params.tmpdir}/run_${{dir_count}}"
-            mkdir -p "$outdir"
-            echo "[K-CHOPORE]   Basecalling directory $dir_count: $fast5_dir"
-            guppy_basecaller \
-                -i "$fast5_dir" \
-                -s "$outdir" \
-                -c {params.guppy_cfg} \
-                --num_callers {threads} \
-                --recursive >> {log} 2>&1
-        done
-
-        # Concatenate all pass FASTQs
-        echo "[K-CHOPORE] Merging basecalled reads..."
-        cat {params.tmpdir}/run_*/pass/*.fastq > {output.fastq}
-
-        # Merge sequencing summaries (header from first, data from all)
-        first=true
-        for summary_file in {params.tmpdir}/run_*/sequencing_summary.txt; do
-            if [ -f "$summary_file" ]; then
-                if $first; then
-                    cat "$summary_file" > {output.summary}
-                    first=false
+            # Concatenate all gzipped FASTQs from all fastq_pass directories
+            > {output.fastq}
+            for fq_dir in {params.fastq_dirs}; do
+                echo "[K-CHOPORE]   Processing: $fq_dir"
+                if ls "$fq_dir"/*.fastq.gz 1>/dev/null 2>&1; then
+                    zcat "$fq_dir"/*.fastq.gz >> {output.fastq}
+                elif ls "$fq_dir"/*.fastq 1>/dev/null 2>&1; then
+                    cat "$fq_dir"/*.fastq >> {output.fastq}
                 else
-                    tail -n +2 "$summary_file" >> {output.summary}
+                    echo "[K-CHOPORE]   WARNING: No FASTQ files found in $fq_dir"
                 fi
-            fi
-        done
+            done
 
-        # Clean up Guppy temp directories
-        rm -rf {params.tmpdir}
+            # Merge sequencing summaries (header from first, data from rest)
+            first=true
+            for summary_dir in {params.summary_dirs}; do
+                for summary_file in "$summary_dir"/sequencing_summary_*.txt; do
+                    if [ -f "$summary_file" ]; then
+                        echo "[K-CHOPORE]   Summary: $summary_file"
+                        if $first; then
+                            cat "$summary_file" > {output.summary}
+                            first=false
+                        else
+                            tail -n +2 "$summary_file" >> {output.summary}
+                        fi
+                    fi
+                done
+            done
 
-        echo "[K-CHOPORE] Basecalling completed for {wildcards.sample}."
-        echo "[K-CHOPORE]   Reads: $(wc -l < {output.fastq} | awk '{{print $1/4}}')"
+            echo "[K-CHOPORE] Merge completed for {wildcards.sample}."
+            echo "[K-CHOPORE]   Reads: $(( $(wc -l < {output.fastq}) / 4 ))"
+
+        else
+            # =====================================================
+            # FAST5-ONLY: basecall with Guppy
+            # =====================================================
+            echo "[K-CHOPORE] Basecalling {wildcards.sample} with Guppy..."
+            mkdir -p {params.tmpdir}
+
+            dir_count=0
+            for fast5_dir in {params.fast5_dirs}; do
+                dir_count=$((dir_count + 1))
+                outdir="{params.tmpdir}/run_${{dir_count}}"
+                mkdir -p "$outdir"
+                echo "[K-CHOPORE]   Basecalling directory $dir_count: $fast5_dir"
+                guppy_basecaller \
+                    -i "$fast5_dir" \
+                    -s "$outdir" \
+                    -c {params.guppy_cfg} \
+                    --num_callers {threads} \
+                    --recursive >> {log} 2>&1
+            done
+
+            # Concatenate all pass FASTQs
+            echo "[K-CHOPORE] Merging basecalled reads..."
+            cat {params.tmpdir}/run_*/pass/*.fastq > {output.fastq}
+
+            # Merge sequencing summaries
+            first=true
+            for summary_file in {params.tmpdir}/run_*/sequencing_summary.txt; do
+                if [ -f "$summary_file" ]; then
+                    if $first; then
+                        cat "$summary_file" > {output.summary}
+                        first=false
+                    else
+                        tail -n +2 "$summary_file" >> {output.summary}
+                    fi
+                fi
+            done
+
+            rm -rf {params.tmpdir}
+
+            echo "[K-CHOPORE] Basecalling completed for {wildcards.sample}."
+            echo "[K-CHOPORE]   Reads: $(( $(wc -l < {output.fastq}) / 4 ))"
+        fi
         """
 
 # =============================================================
@@ -460,7 +547,7 @@ rule flair_quantify:
             --tpm \
             --threads {params.threads} \
             -o results/flair/counts_matrix > {log} 2>&1
-        # FLAIR quantify outputs counts_matrix.counts.tsv — rename to expected name
+        # FLAIR quantify outputs counts_matrix.counts.tsv - rename to expected name
         mv results/flair/counts_matrix.counts.tsv {output.counts}
         echo "[K-CHOPORE] FLAIR quantification completed."
         """
@@ -514,7 +601,7 @@ rule nanopolish_index:
     output:
         index_done="results/nanopolish/{sample}_index.done"
     params:
-        fast5_dirs=lambda wildcards: get_fast5_dirs(wildcards.sample)
+        fast5_dirs=lambda wildcards: get_raw_fast5_dirs(wildcards.sample)
     log:
         "logs/nanopolish_index_{sample}.log"
     shell:

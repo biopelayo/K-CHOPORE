@@ -10,8 +10,10 @@
 
 # -------------------------------------------------------------
 # SAMPLE SHEET
-# Each sample has: genotype, treatment, and list of FAST5 dirs
-# Multiple fast5_dirs = re-run data to merge (concatenated FASTQs)
+# Each sample has: genotype, treatment, data_type, and source dirs
+# data_type: "fastq" (pre-basecalled) or "fast5" (needs basecalling)
+# fastq_dirs: NAS folder names containing fastq_pass/ subdirs
+# fast5_dirs: NAS folder names containing fast5/ or fast5_pass/ subdirs
 # Sample IDs use underscores only (FLAIR requirement)
 # -------------------------------------------------------------
 samples:
@@ -19,64 +21,92 @@ samples:
   WT_C_R1:
     genotype: "WT"
     treatment: "C"
-    fast5_dirs: ["WT_C_R1"]
+    data_type: "fastq"
+    nas_dirs: ["WT_C_R1"]
+    run_subdirs: ["no_sample/20220224_1639_MC-112869_FAR90122_f656439d"]
   WT_C_R2:
     genotype: "WT"
     treatment: "C"
-    fast5_dirs: ["WT_C_R2"]
+    data_type: "fastq"
+    nas_dirs: ["WT_C_R2"]
+    run_subdirs: ["no_sample/20220323_1648_MC-112869_FAR91957_0263d5a0"]
   WT_C_R3:
     genotype: "WT"
     treatment: "C"
-    fast5_dirs: ["WT_C_R3"]
+    data_type: "fastq"
+    nas_dirs: ["WT_C_R3"]
+    run_subdirs: ["no_sample/20220301_1656_MC-112869_FAR90189_a35665b9"]
 
   # --- Wild Type, Antimycin A ---
   WT_AA_R1:
     genotype: "WT"
     treatment: "AA"
-    fast5_dirs: ["WT_AA_R1"]
+    data_type: "fastq"
+    nas_dirs: ["WT_AA_R1"]
+    run_subdirs: ["20220221_1734_MC-112869_FAR92050_00e32dc0"]
   WT_AA_R2:
     genotype: "WT"
     treatment: "AA"
-    fast5_dirs: ["WT_AA_R2"]
+    data_type: "fastq"
+    nas_dirs: ["WT_AA_R2"]
+    run_subdirs: ["no_sample/20220316_1902_MC-112869_FAR91120_624c5f7d"]
   WT_AA_R3:
     genotype: "WT"
     treatment: "AA"
-    fast5_dirs: ["WT_AA_R3", "WT_AA_R3_2"]
+    data_type: "fastq"
+    nas_dirs: ["WT_AA_R3", "WT_AA_R3_2"]
+    run_subdirs:
+      - "no_sample/20220315_1614_MC-112869_FAR90098_c891954b"
+      - "no_sample/20220316_1636_MC-112869_FAR90098_6e408c50"
 
   # --- anac017-1 mutant, Control ---
   anac017_1_C_R1:
     genotype: "anac017_1"
     treatment: "C"
-    fast5_dirs: ["anac017-1_C_R1"]
+    data_type: "fastq"
+    nas_dirs: ["anac017-1_C_R1"]
+    run_subdirs: ["no_sample/20220330_1936_MC-112869_FAR92015_6ac8671e"]
   anac017_1_C_R2:
     genotype: "anac017_1"
     treatment: "C"
-    fast5_dirs: ["anac017-1_C_R2"]
+    data_type: "fastq"
+    nas_dirs: ["anac017-1_C_R2"]
+    run_subdirs: ["no_sample/20220404_1440_MC-112869_FAR91811_a135af49"]
   anac017_1_C_R3:
     genotype: "anac017_1"
     treatment: "C"
-    fast5_dirs: ["anac017-1_C_R3"]
+    data_type: "fastq"
+    nas_dirs: ["anac017-1_C_R3"]
+    run_subdirs: ["no_sample/20220405_1610_MC-112869_FAR91811_d5fba51e"]
 
   # --- anac017-1 mutant, Antimycin A ---
   anac017_1_AA_R1:
     genotype: "anac017_1"
     treatment: "AA"
-    fast5_dirs: ["anac017-1_AA_R1"]
+    data_type: "fastq"
+    nas_dirs: ["anac017-1_AA_R1"]
+    run_subdirs: ["no_sample/20220328_1730_MC-112869_FAR90074_970aa1f5"]
   anac017_1_AA_R2:
     genotype: "anac017_1"
     treatment: "AA"
-    fast5_dirs: ["anac017-1_AA_R2", "anac017_AA_R2-2"]
+    data_type: "fast5"
+    nas_dirs: ["anac017-1_AA_R2", "anac017_AA_R2-2"]
+    run_subdirs:
+      - "no_sample/20220930_1148_MC-112869_FAR81498_9fdc7765"
+      - "no_sample/20221215_1232_MC-112869_FAT21048_d754e27f"
   anac017_1_AA_R3:
     genotype: "anac017_1"
     treatment: "AA"
-    fast5_dirs: ["anac017-1_AA_R3"]
+    data_type: "fast5"
+    nas_dirs: ["anac017-1_AA_R3"]
+    run_subdirs: ["no_sample/20220929_1527_MC-112869_FAU09642_5f85f08b"]
 
 # -------------------------------------------------------------
 # INPUT FILES AND DIRECTORIES
 # -------------------------------------------------------------
 input_files:
-  # NAS mount point (FAST5 data, read-only, mounted via SSHFS)
-  nas_mount: "/nas"
+  # Local data directories (downloaded from NAS)
+  raw_data_dir: "data/raw"
 
   # Reference genome and annotations
   reference_genome: "data/reference/genome/TAIR10_chr_all.fas.fasta"
@@ -96,6 +126,7 @@ output:
 # -------------------------------------------------------------
 tools:
   # Basecalling - Guppy CPU (R9.4.1 flowcell, direct RNA)
+  # Only used for 3 FAST5-only samples (anac017_1_AA_R2, anac017_1_AA_R3)
   basecaller: "guppy"
   guppy_config_file: "/opt/ont-guppy-cpu/data/rna_r9.4.1_70bps_hac.cfg"
 
