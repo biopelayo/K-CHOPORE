@@ -170,7 +170,9 @@ RUN pip install --no-cache-dir xpore || \
 RUN git clone https://gitlab.com/piroonj/eligos2.git /home/eligos2 && \
     cd /home/eligos2 && \
     pip install --no-cache-dir -r requirements.txt 2>/dev/null || true && \
-    chmod +x /home/eligos2/Scripts/*.py 2>/dev/null || true
+    chmod +x /home/eligos2/Scripts/*.py 2>/dev/null || true && \
+    # Fix rpy2 DeprecationWarning in pandas2ri.activate() (rpy2 >= 3.6) \
+    sed -i 's/^pandas2ri.activate()/try:\n    pandas2ri.activate()\nexcept DeprecationWarning:\n    pass/' /home/eligos2/_rna_mod.py
 
 # ==============================================================
 # 16. MultiQC (aggregate QC report)
