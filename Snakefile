@@ -1,252 +1,157 @@
 # =============================================================
 # K-CHOPORE Pipeline - Snakemake Workflow
 # =============================================================
-# Comprehensive pipeline for ONT Direct RNA Sequencing analysis
-# including basecalling, QC, alignment, isoform analysis,
-# epitranscriptomic modification detection, and differential expression.
+# ONT Direct RNA Sequencing analysis pipeline:
+# FAST5 basecalling -> QC -> alignment -> isoforms ->
+# epitranscriptomic modifications -> differential expression
 #
 # Created by Pelayo Gonzalez de Lena Rodriguez, MSc
 # FPI Severo Ochoa Fellow
 # Cancer Epigenetics and Nanomedicine Lab | FINBA
 # Systems Biology Lab | University of Oviedo
-# https://www.linkedin.com/in/biopelayo/
-# https://gitlab.com/bio.pelayo/
 # =============================================================
 
 import os
 
-# Load configuration
 configfile: "config/config.yml"
 
 # -------------------------------------------------------------
-# Global variables from config
+# Parse sample sheet from config
 # -------------------------------------------------------------
-SAMPLES = config["samples"]
-SAMPLES_WITH_FAST5 = config.get("samples_with_fast5", SAMPLES)
+SAMPLE_SHEET = config["samples"]
+SAMPLE_IDS = list(SAMPLE_SHEET.keys())
 THREADS = config["params"]["threads"]
 
 # Reference files
 REFERENCE_GENOME = config["input_files"]["reference_genome"]
 REFERENCE_INDEX = config["input_files"]["reference_genome_mmi"]
 GTF_FILE = config["input_files"]["gtf_file"]
-
-# Output directories
-OUT = config["output"]["path"]
-LOGS = config["output"]["logs"]
+NAS_MOUNT = config["input_files"]["nas_mount"]
 
 # Tool settings
 MINIMAP2_PRESET = config["tools"]["minimap2_preset"]
 MINIMAP2_KMER = config["tools"]["minimap2_kmer_size"]
 MINIMAP2_EXTRA = config["tools"]["minimap2_extra_flags"]
 
-# Build sample-to-sequencing-summary mapping
-# This resolves the mismatch between simple {sample}_sequencing_summary.txt patterns
-# and actual filenames that may contain flowcell IDs (e.g., WT_C_R1_sequencing_summary_FAR90122_d34138fc.txt)
-_seq_summaries = config["input_files"].get("sequencing_summaries", [])
-SEQUENCING_SUMMARY = {}
-for i, sample in enumerate(SAMPLES):
-    if i < len(_seq_summaries):
-        SEQUENCING_SUMMARY[sample] = _seq_summaries[i]
-    else:
-        # Fallback: use default naming pattern
-        SEQUENCING_SUMMARY[sample] = f"data/raw/summaries/{sample}_sequencing_summary.txt"
+# Helper functions
+def get_fast5_dirs(sample):
+    """Return list of FAST5 directory paths on NAS for a sample."""
+    return [os.path.join(NAS_MOUNT, d) for d in SAMPLE_SHEET[sample]["fast5_dirs"]]
 
-# Print configuration for debugging
-print(f"[K-CHOPORE] Samples: {SAMPLES}")
-print(f"[K-CHOPORE] Reference genome: {REFERENCE_GENOME}")
+def get_genotype(sample):
+    return SAMPLE_SHEET[sample]["genotype"]
+
+def get_treatment(sample):
+    return SAMPLE_SHEET[sample]["treatment"]
+
+# Print configuration
+print(f"[K-CHOPORE] Samples ({len(SAMPLE_IDS)}): {SAMPLE_IDS}")
+print(f"[K-CHOPORE] Reference: {REFERENCE_GENOME}")
+print(f"[K-CHOPORE] NAS mount: {NAS_MOUNT}")
 print(f"[K-CHOPORE] Threads: {THREADS}")
-print(f"[K-CHOPORE] Minimap2 preset: {MINIMAP2_PRESET} (k={MINIMAP2_KMER})")
-print(f"[K-CHOPORE] Sequencing summaries: {SEQUENCING_SUMMARY}")
-print(f"[K-CHOPORE] Samples with FAST5: {SAMPLES_WITH_FAST5}")
-
-# -------------------------------------------------------------
-# Helper: collect conditional targets for the 'all' rule
-# -------------------------------------------------------------
-def get_all_targets():
-    targets = []
-
-    # Always: directory structure
-    targets.append("complete_structure_created.txt")
-
-    # Always: genome index
-    targets.append(REFERENCE_INDEX)
-
-    # Basecalling (optional, if starting from FAST5/POD5)
-    if config["params"].get("run_basecalling", False):
-        targets.extend(
-            expand("results/basecalls/{sample}.fastq", sample=SAMPLES)
-        )
-
-    # NanoFilt read filtering
-    if config["params"].get("run_nanofilt", True):
-        targets.extend(
-            expand("results/fastq_filtered/{sample}_filtered.fastq", sample=SAMPLES)
-        )
-
-    # NanoPlot QC per sample
-    if config["params"].get("run_nanoplot", True):
-        targets.extend(
-            expand("results/nanoplot/{sample}/NanoStats.txt", sample=SAMPLES)
-        )
-
-    # NanoComp comparison
-    if config["params"].get("run_nanocomp", True):
-        targets.append("results/nanocomp/NanoComp-report.html")
-
-    # Alignment (always)
-    targets.extend(
-        expand("results/sorted_bam/{sample}_sorted.bam", sample=SAMPLES)
-    )
-
-    # Samtools stats
-    targets.extend(
-        expand("results/samtools_stats/{sample}_flagstat.txt", sample=SAMPLES)
-    )
-    targets.extend(
-        expand("results/samtools_stats/{sample}_stats.txt", sample=SAMPLES)
-    )
-
-    # pycoQC
-    if config["params"].get("run_pycoqc", True):
-        targets.extend(
-            expand("results/quality_analysis/pycoQC_output_{sample}.html", sample=SAMPLES)
-        )
-
-    # FLAIR isoform analysis
-    if config["params"].get("run_flair", True):
-        targets.extend(
-            expand("results/flair/{sample}_flair.collapse.isoforms.bed", sample=SAMPLES)
-        )
-        targets.append("results/flair/counts_matrix.tsv")
-
-    # StringTie2 isoform assembly
-    if config["params"].get("run_stringtie", False):
-        targets.extend(
-            expand("results/stringtie/{sample}_stringtie.gtf", sample=SAMPLES)
-        )
-
-    # ELIGOS2 epitranscriptomic modification
-    if config["params"].get("run_eligos2", True):
-        targets.extend(
-            expand("results/eligos/{sample}_eligos_output.txt", sample=SAMPLES)
-        )
-
-    # m6Anet modification detection (only for samples with FAST5)
-    if config["params"].get("run_m6anet", True):
-        targets.extend(
-            expand("results/m6anet/{sample}/data.site_proba.csv", sample=SAMPLES_WITH_FAST5)
-        )
-
-    # xPore differential modification
-    if config["params"].get("run_xpore", False):
-        targets.append("results/xpore/diffmod.table")
-
-    # DESeq2 differential expression
-    if config["params"].get("run_deseq2", True):
-        targets.append("results/deseq2/deseq2_results.csv")
-
-    # MultiQC aggregate report
-    if config["params"].get("run_multiqc", True):
-        targets.append("results/multiqc/multiqc_report.html")
-
-    return targets
 
 # =============================================================
 # RULE ALL - Master target
 # =============================================================
 rule all:
     input:
-        get_all_targets()
+        # Genome index
+        REFERENCE_INDEX,
+        # Basecalled FASTQs
+        expand("results/basecalls/{sample}.fastq", sample=SAMPLE_IDS),
+        expand("results/basecalls/{sample}_sequencing_summary.txt", sample=SAMPLE_IDS),
+        # Filtered reads
+        expand("results/fastq_filtered/{sample}_filtered.fastq", sample=SAMPLE_IDS),
+        # QC
+        expand("results/nanoplot/{sample}/NanoStats.txt", sample=SAMPLE_IDS),
+        "results/nanocomp/NanoComp-report.html",
+        expand("results/quality_analysis/pycoQC_output_{sample}.html", sample=SAMPLE_IDS),
+        # Alignment stats
+        expand("results/sorted_bam/{sample}_sorted.bam", sample=SAMPLE_IDS),
+        expand("results/samtools_stats/{sample}_flagstat.txt", sample=SAMPLE_IDS),
+        expand("results/samtools_stats/{sample}_stats.txt", sample=SAMPLE_IDS),
+        # FLAIR isoforms
+        expand("results/flair/{sample}_flair.collapse.isoforms.bed", sample=SAMPLE_IDS),
+        "results/flair/counts_matrix.tsv",
+        # ELIGOS2 modification detection
+        expand("results/eligos/{sample}_eligos_output.txt", sample=SAMPLE_IDS),
+        # m6Anet modification detection (all samples have FAST5)
+        expand("results/m6anet/{sample}/data.site_proba.csv", sample=SAMPLE_IDS),
+        # DESeq2 differential expression (2x2 factorial)
+        "results/deseq2/deseq2_genotype_results.csv",
+        "results/deseq2/deseq2_treatment_results.csv",
+        "results/deseq2/deseq2_interaction_results.csv",
+        # MultiQC aggregate report
+        "results/multiqc/multiqc_report.html",
 
 # =============================================================
-# RULE: Setup project directory structure
-# =============================================================
-rule setup_complete_structure:
-    output:
-        "complete_structure_created.txt"
-    run:
-        dirs = [
-            "config", "data", "data/raw/fastq", "data/raw/fast5",
-            "data/raw/pod5", "data/raw/summaries",
-            "data/reference/genome", "data/reference/annotations",
-            "data/reference/transcriptome",
-            "docs", "envs", "logs", "notebooks", "publication",
-            "results", "reviews", "scripts",
-            "results/basecalls", "results/fastq_filtered",
-            "results/mapped", "results/sorted_bam",
-            "results/quality_analysis", "results/nanoplot",
-            "results/nanocomp", "results/samtools_stats",
-            "results/flair", "results/stringtie", "results/bambu",
-            "results/eligos", "results/m6anet", "results/xpore",
-            "results/nanopolish", "results/deseq2", "results/multiqc"
-        ]
-        for d in dirs:
-            os.makedirs(d, exist_ok=True)
-            print(f"[K-CHOPORE] Directory ready: {d}")
-        with open(output[0], 'w') as f:
-            f.write("K-CHOPORE project structure created successfully.")
-
-# =============================================================
-# BASECALLING (Optional - from FAST5/POD5 to FASTQ)
+# BASECALLING - Guppy (FAST5 -> FASTQ)
 # =============================================================
 
-# Rule: Basecall with Dorado (recommended for modern ONT data)
-rule basecall_dorado:
-    input:
-        structure_created="complete_structure_created.txt",
-        pod5_dir=config["input_files"]["pod5_dir"]
-    output:
-        fastq="results/basecalls/{sample}.fastq"
-    params:
-        model=config["tools"]["dorado_model"],
-        dorado=config["tools"]["dorado_path"]
-    threads: THREADS
-    log:
-        "logs/basecall_dorado_{sample}.log"
-    shell:
-        """
-        mkdir -p results/basecalls logs
-        echo "[K-CHOPORE] Basecalling with Dorado for {wildcards.sample}..."
-        {params.dorado} basecaller {params.model} \
-            {input.pod5_dir}/{wildcards.sample}/ \
-            --emit-fastq > {output.fastq} 2> {log}
-        echo "[K-CHOPORE] Basecalling completed for {wildcards.sample}."
-        """
-
-# Rule: Basecall with Guppy (legacy support)
 rule basecall_guppy:
-    input:
-        structure_created="complete_structure_created.txt",
-        fast5_dir=config["input_files"]["fast5_dir"]
     output:
-        fastq="results/basecalls/{sample}_guppy.fastq"
+        fastq="results/basecalls/{sample}.fastq",
+        summary="results/basecalls/{sample}_sequencing_summary.txt"
     params:
-        guppy_cfg=config["tools"]["guppy_config_file"]
+        guppy_cfg=config["tools"]["guppy_config_file"],
+        fast5_dirs=lambda wildcards: get_fast5_dirs(wildcards.sample),
+        tmpdir="results/basecalls/tmp_{sample}"
     threads: THREADS
     log:
         "logs/basecall_guppy_{sample}.log"
     shell:
         """
-        mkdir -p results/basecalls logs
-        echo "[K-CHOPORE] Basecalling with Guppy for {wildcards.sample}..."
-        guppy_basecaller \
-            -i {input.fast5_dir}/{wildcards.sample}/ \
-            -s results/basecalls/{wildcards.sample}_guppy/ \
-            -c {params.guppy_cfg} \
-            --num_callers {threads} \
-            --compress_fastq > {log} 2>&1
-        cat results/basecalls/{wildcards.sample}_guppy/pass/*.fastq > {output.fastq}
-        echo "[K-CHOPORE] Guppy basecalling completed for {wildcards.sample}."
+        mkdir -p {params.tmpdir} results/basecalls logs
+
+        echo "[K-CHOPORE] Basecalling {wildcards.sample} with Guppy..."
+        echo "[K-CHOPORE] FAST5 directories: {params.fast5_dirs}"
+
+        # Basecall each FAST5 directory (handles merged re-runs)
+        dir_count=0
+        for fast5_dir in {params.fast5_dirs}; do
+            dir_count=$((dir_count + 1))
+            outdir="{params.tmpdir}/run_${{dir_count}}"
+            mkdir -p "$outdir"
+            echo "[K-CHOPORE]   Basecalling directory $dir_count: $fast5_dir"
+            guppy_basecaller \
+                -i "$fast5_dir" \
+                -s "$outdir" \
+                -c {params.guppy_cfg} \
+                --num_callers {threads} \
+                --recursive >> {log} 2>&1
+        done
+
+        # Concatenate all pass FASTQs
+        echo "[K-CHOPORE] Merging basecalled reads..."
+        cat {params.tmpdir}/run_*/pass/*.fastq > {output.fastq}
+
+        # Merge sequencing summaries (header from first, data from all)
+        first=true
+        for summary_file in {params.tmpdir}/run_*/sequencing_summary.txt; do
+            if [ -f "$summary_file" ]; then
+                if $first; then
+                    cat "$summary_file" > {output.summary}
+                    first=false
+                else
+                    tail -n +2 "$summary_file" >> {output.summary}
+                fi
+            fi
+        done
+
+        # Clean up Guppy temp directories
+        rm -rf {params.tmpdir}
+
+        echo "[K-CHOPORE] Basecalling completed for {wildcards.sample}."
+        echo "[K-CHOPORE]   Reads: $(wc -l < {output.fastq} | awk '{{print $1/4}}')"
         """
 
 # =============================================================
 # READ QC AND FILTERING
 # =============================================================
 
-# Rule: Filter reads with NanoFilt
 rule nanofilt:
     input:
-        fastq="data/raw/fastq/{sample}.fastq"
+        fastq="results/basecalls/{sample}.fastq"
     output:
         filtered="results/fastq_filtered/{sample}_filtered.fastq"
     params:
@@ -258,7 +163,7 @@ rule nanofilt:
     shell:
         """
         mkdir -p results/fastq_filtered logs
-        echo "[K-CHOPORE] Filtering reads with NanoFilt for {wildcards.sample}..."
+        echo "[K-CHOPORE] Filtering reads for {wildcards.sample}..."
         max_len_flag=""
         if [ {params.max_len} -gt 0 ]; then
             max_len_flag="--maxlength {params.max_len}"
@@ -268,7 +173,6 @@ rule nanofilt:
         echo "[K-CHOPORE] NanoFilt completed for {wildcards.sample}."
         """
 
-# Rule: NanoPlot per-sample QC
 rule nanoplot:
     input:
         fastq="results/fastq_filtered/{sample}_filtered.fastq"
@@ -283,7 +187,7 @@ rule nanoplot:
     shell:
         """
         mkdir -p {params.outdir} logs
-        echo "[K-CHOPORE] Running NanoPlot QC for {wildcards.sample}..."
+        echo "[K-CHOPORE] Running NanoPlot for {wildcards.sample}..."
         NanoPlot --fastq {input.fastq} \
             --outdir {params.outdir} \
             --format {params.fmt} \
@@ -294,15 +198,14 @@ rule nanoplot:
         echo "[K-CHOPORE] NanoPlot completed for {wildcards.sample}."
         """
 
-# Rule: NanoComp comparative QC across all samples
 rule nanocomp:
     input:
-        fastqs=expand("results/fastq_filtered/{sample}_filtered.fastq", sample=SAMPLES)
+        fastqs=expand("results/fastq_filtered/{sample}_filtered.fastq", sample=SAMPLE_IDS)
     output:
         report="results/nanocomp/NanoComp-report.html"
     params:
         outdir="results/nanocomp",
-        names=" ".join(SAMPLES)
+        names=" ".join(SAMPLE_IDS)
     threads: 4
     log:
         "logs/nanocomp.log"
@@ -322,10 +225,8 @@ rule nanocomp:
 # ALIGNMENT
 # =============================================================
 
-# Rule: Index reference genome with Minimap2 (splice-aware for RNA)
 rule index_genome:
     input:
-        structure_created="complete_structure_created.txt",
         reference_genome=REFERENCE_GENOME
     output:
         reference_index=REFERENCE_INDEX
@@ -334,20 +235,18 @@ rule index_genome:
     shell:
         """
         mkdir -p "$(dirname {output.reference_index})" logs
-        echo "[K-CHOPORE] Indexing reference genome for splice-aware RNA alignment..."
+        echo "[K-CHOPORE] Indexing reference genome..."
         minimap2 -d {output.reference_index} -k {k} {input.reference_genome} > {log} 2>&1
         echo "[K-CHOPORE] Genome indexing completed."
         """.replace("{k}", str(MINIMAP2_KMER))
 
-# Rule: Align reads with Minimap2 (splice-aware for direct RNA-seq)
 rule map_with_minimap2:
     input:
-        structure_created="complete_structure_created.txt",
         reference_index=REFERENCE_INDEX,
         fastq="results/fastq_filtered/{sample}_filtered.fastq",
         bed=GTF_FILE
     output:
-        sam="results/mapped/{sample}.sam"
+        sam=temp("results/mapped/{sample}.sam")
     params:
         preset=MINIMAP2_PRESET,
         kmer=MINIMAP2_KMER,
@@ -370,7 +269,6 @@ rule map_with_minimap2:
         echo "[K-CHOPORE] Alignment completed for {wildcards.sample}."
         """
 
-# Rule: Sort and index BAM files
 rule sort_and_index_bam:
     input:
         sam="results/mapped/{sample}.sam"
@@ -389,7 +287,6 @@ rule sort_and_index_bam:
         echo "[K-CHOPORE] BAM sorted and indexed for {wildcards.sample}."
         """
 
-# Rule: Samtools flagstat and stats
 rule samtools_stats:
     input:
         bam="results/sorted_bam/{sample}_sorted.bam",
@@ -405,17 +302,16 @@ rule samtools_stats:
         echo "[K-CHOPORE] Computing alignment statistics for {wildcards.sample}..."
         samtools flagstat {input.bam} > {output.flagstat} 2> {log}
         samtools stats {input.bam} > {output.stats} 2>> {log}
-        echo "[K-CHOPORE] Alignment stats completed for {wildcards.sample}."
+        echo "[K-CHOPORE] Stats completed for {wildcards.sample}."
         """
 
 # =============================================================
-# QUALITY CONTROL
+# QUALITY CONTROL - pycoQC
 # =============================================================
 
-# Rule: pycoQC quality analysis
 rule quality_analysis_with_pycoQC:
     input:
-        summary=lambda wildcards: SEQUENCING_SUMMARY[wildcards.sample],
+        summary="results/basecalls/{sample}_sequencing_summary.txt",
         bam="results/sorted_bam/{sample}_sorted.bam",
         bai="results/sorted_bam/{sample}_sorted.bam.bai"
     output:
@@ -439,7 +335,6 @@ rule quality_analysis_with_pycoQC:
 # ISOFORM ANALYSIS - FLAIR
 # =============================================================
 
-# Rule: FLAIR align
 rule flair_align:
     input:
         genome=REFERENCE_GENOME,
@@ -464,7 +359,6 @@ rule flair_align:
         echo "[K-CHOPORE] FLAIR align completed for {wildcards.sample}."
         """
 
-# Rule: FLAIR correct
 rule flair_correct:
     input:
         bed="results/flair/{sample}_flair.bed",
@@ -482,11 +376,11 @@ rule flair_correct:
         mkdir -p results/flair logs
         echo "[K-CHOPORE] Running FLAIR correct for {wildcards.sample}..."
         # Rename BED chromosome names to match GTF convention (1->Chr1, etc.)
-        sed -e 's/^1\t/Chr1\t/' -e 's/^2\t/Chr2\t/' -e 's/^3\t/Chr3\t/' \
-            -e 's/^4\t/Chr4\t/' -e 's/^5\t/Chr5\t/' \
-            -e 's/^mitochondria\t/ChrM\t/' -e 's/^chloroplast\t/ChrC\t/' \
+        sed -e 's/^1\\t/Chr1\\t/' -e 's/^2\\t/Chr2\\t/' -e 's/^3\\t/Chr3\\t/' \
+            -e 's/^4\\t/Chr4\\t/' -e 's/^5\\t/Chr5\\t/' \
+            -e 's/^mitochondria\\t/ChrM\\t/' -e 's/^chloroplast\\t/ChrC\\t/' \
             {input.bed} > results/flair/{wildcards.sample}_flair_renamed.bed
-        # Create renamed genome FASTA matching GTF chromosome names
+        # Create renamed genome FASTA matching GTF chromosome names (once)
         if [ ! -f results/flair/genome_renamed.fasta ]; then
             sed -e 's/^>1 />Chr1 /' -e 's/^>2 />Chr2 /' -e 's/^>3 />Chr3 /' \
                 -e 's/^>4 />Chr4 /' -e 's/^>5 />Chr5 /' \
@@ -502,7 +396,6 @@ rule flair_correct:
         echo "[K-CHOPORE] FLAIR correct completed for {wildcards.sample}."
         """
 
-# Rule: FLAIR collapse
 rule flair_collapse:
     input:
         corrected_bed="results/flair/{sample}_flair_all_corrected.bed",
@@ -534,11 +427,23 @@ rule flair_collapse:
         echo "[K-CHOPORE] FLAIR collapse completed for {wildcards.sample}."
         """
 
-# Rule: FLAIR quantify
+# Generate reads manifest for FLAIR quantify from config sample sheet
+rule generate_reads_manifest:
+    output:
+        manifest="results/flair/reads_manifest.tsv"
+    run:
+        with open(output.manifest, 'w') as f:
+            f.write("sample\tcondition\tbatch\tfastq_path\n")
+            for sample_id, info in SAMPLE_SHEET.items():
+                condition = f"{info['genotype']}_{info['treatment']}"
+                fastq_path = f"results/fastq_filtered/{sample_id}_filtered.fastq"
+                f.write(f"{sample_id}\t{condition}\tbatch1\t{fastq_path}\n")
+        print(f"[K-CHOPORE] Generated reads manifest with {len(SAMPLE_SHEET)} samples.")
+
 rule flair_quantify:
     input:
-        isoforms_fa=expand("results/flair/{sample}_flair.collapse.isoforms.fa", sample=SAMPLES),
-        reads_manifest=config["input_files"]["reads_manifest"]
+        isoforms_fa=expand("results/flair/{sample}_flair.collapse.isoforms.fa", sample=SAMPLE_IDS),
+        reads_manifest="results/flair/reads_manifest.tsv"
     output:
         counts="results/flair/counts_matrix.tsv"
     params:
@@ -555,86 +460,13 @@ rule flair_quantify:
             --tpm \
             --threads {params.threads} \
             -o results/flair/counts_matrix > {log} 2>&1
-        # FLAIR quantify outputs counts_matrix.counts.tsv, rename to expected name
-        mv results/flair/counts_matrix.counts.tsv {output.counts} 2>/dev/null || true
+        # FLAIR quantify outputs counts_matrix.counts.tsv — rename to expected name
+        mv results/flair/counts_matrix.counts.tsv {output.counts}
         echo "[K-CHOPORE] FLAIR quantification completed."
         """
 
-# Rule: FLAIR differential expression
-rule flair_diff_exp:
-    input:
-        counts_matrix="results/flair/counts_matrix.tsv"
-    output:
-        diff_exp="results/flair/diffExp/genes_deseq2_sig.tsv"
-    params:
-        out_dir="results/flair/diffExp"
-    log:
-        "logs/flair_diffexp.log"
-    shell:
-        """
-        mkdir -p {params.out_dir} logs
-        echo "[K-CHOPORE] Running FLAIR differential expression..."
-        flair diffExp \
-            -q {input.counts_matrix} \
-            -o {params.out_dir} > {log} 2>&1
-        echo "[K-CHOPORE] FLAIR diffExp completed."
-        """
-
-# Rule: FLAIR differential splicing
-rule flair_diff_splice:
-    input:
-        isoforms_bed=expand("results/flair/{sample}_flair.collapse.isoforms.bed", sample=SAMPLES[0]),
-        counts_matrix="results/flair/counts_matrix.tsv"
-    output:
-        diff_splice="results/flair/diffSplice/diffsplice.alt3.events.quant.tsv"
-    params:
-        out_dir="results/flair/diffSplice"
-    log:
-        "logs/flair_diffsplice.log"
-    shell:
-        """
-        mkdir -p results/flair/diffSplice logs
-        echo "[K-CHOPORE] Running FLAIR differential splicing..."
-        flair diffSplice \
-            -i {input.isoforms_bed} \
-            -q {input.counts_matrix} \
-            --test > {log} 2>&1
-        echo "[K-CHOPORE] FLAIR diffSplice completed."
-        """
-
 # =============================================================
-# ISOFORM ANALYSIS - StringTie2 (Alternative)
-# =============================================================
-
-rule stringtie_assemble:
-    input:
-        bam="results/sorted_bam/{sample}_sorted.bam",
-        bai="results/sorted_bam/{sample}_sorted.bam.bai",
-        gtf=GTF_FILE
-    output:
-        gtf="results/stringtie/{sample}_stringtie.gtf"
-    params:
-        min_cov=config["tools"]["stringtie_min_cov"],
-        min_tpm=config["tools"]["stringtie_min_tpm"]
-    threads: THREADS
-    log:
-        "logs/stringtie_{sample}.log"
-    shell:
-        """
-        mkdir -p results/stringtie logs
-        echo "[K-CHOPORE] Running StringTie2 for {wildcards.sample}..."
-        stringtie {input.bam} \
-            -G {input.gtf} \
-            -o {output.gtf} \
-            -p {threads} \
-            -L \
-            -c {params.min_cov} \
-            -A results/stringtie/{wildcards.sample}_gene_abund.tab > {log} 2>&1
-        echo "[K-CHOPORE] StringTie2 completed for {wildcards.sample}."
-        """
-
-# =============================================================
-# EPITRANSCRIPTOMIC MODIFICATION DETECTION - ELIGOS2
+# EPITRANSCRIPTOMIC MODIFICATION - ELIGOS2
 # =============================================================
 
 rule run_eligos2:
@@ -657,11 +489,8 @@ rule run_eligos2:
         """
         mkdir -p {params.outdir} results/eligos logs
         echo "[K-CHOPORE] Running ELIGOS2 for {wildcards.sample}..."
-        # FLAIR BED uses Chr-prefixed names (from GTF), but BAM uses reference names.
-        # Strip 'Chr' prefix to match BAM chromosome naming (TAIR10: 1,2,3,4,5)
+        # Strip Chr prefix from FLAIR BED to match BAM chromosome names (TAIR10: 1,2,3,4,5)
         sed 's/^Chr//' {input.region_bed} > {params.outdir}/region_fixed.bed
-        # ELIGOS2 may fail with pd.concat error on newer pandas (known compatibility issue)
-        # Run it non-fatally and collect whatever output was produced
         eligos2 rna_mod \
             -i {input.bam} \
             -reg {params.outdir}/region_fixed.bed \
@@ -670,37 +499,38 @@ rule run_eligos2:
             --pval {params.pval} \
             --oddR {params.oddR} \
             --esb {params.esb} \
-            --threads {threads} > {log} 2>&1 || echo "[K-CHOPORE] ELIGOS2 exited with warnings for {wildcards.sample}"
-        # Collect main output (baseExt0.txt is the per-position modification call table)
-        cp {params.outdir}/*_baseExt0.txt {output.eligos_output} 2>/dev/null || \
-            touch {output.eligos_output}
+            --threads {threads} > {log} 2>&1
+        cp {params.outdir}/*_baseExt0.txt {output.eligos_output}
         echo "[K-CHOPORE] ELIGOS2 completed for {wildcards.sample}."
         """
 
 # =============================================================
-# EPITRANSCRIPTOMIC MODIFICATION DETECTION - m6Anet
+# EPITRANSCRIPTOMIC MODIFICATION - m6Anet (Signal-level)
 # =============================================================
 
-# Step 1: Nanopolish index FAST5 files for signal-level access
 rule nanopolish_index:
     input:
-        fastq="results/fastq_filtered/{sample}_filtered.fastq",
-        fast5_dir=config["input_files"]["fast5_dir"]
+        fastq="results/fastq_filtered/{sample}_filtered.fastq"
     output:
-        index=touch("results/nanopolish/{sample}_index.done")
+        index_done="results/nanopolish/{sample}_index.done"
+    params:
+        fast5_dirs=lambda wildcards: get_fast5_dirs(wildcards.sample)
     log:
         "logs/nanopolish_index_{sample}.log"
     shell:
         """
         mkdir -p results/nanopolish logs
         echo "[K-CHOPORE] Indexing FAST5 for Nanopolish ({wildcards.sample})..."
-        nanopolish index \
-            -d {input.fast5_dir}/{wildcards.sample}/ \
-            {input.fastq} > {log} 2>&1
+        # Build -d flags for each FAST5 directory
+        d_flags=""
+        for dir in {params.fast5_dirs}; do
+            d_flags="$d_flags -d $dir"
+        done
+        nanopolish index $d_flags {input.fastq} > {log} 2>&1
+        touch {output.index_done}
         echo "[K-CHOPORE] Nanopolish indexing completed for {wildcards.sample}."
         """
 
-# Step 2: Nanopolish eventalign for signal-level data
 rule nanopolish_eventalign:
     input:
         fastq="results/fastq_filtered/{sample}_filtered.fastq",
@@ -728,12 +558,11 @@ rule nanopolish_eventalign:
         echo "[K-CHOPORE] Nanopolish eventalign completed for {wildcards.sample}."
         """
 
-# Step 3: m6Anet dataprep - prepare data for m6A inference
 rule m6anet_dataprep:
     input:
         eventalign="results/nanopolish/{sample}_eventalign.txt"
     output:
-        dataprep_done=touch("results/m6anet/{sample}/dataprep.done")
+        dataprep_done="results/m6anet/{sample}/dataprep.done"
     params:
         outdir="results/m6anet/{sample}"
     threads: config["tools"]["m6anet_num_processors"]
@@ -747,10 +576,10 @@ rule m6anet_dataprep:
             --eventalign {input.eventalign} \
             --out_dir {params.outdir} \
             --n_processes {threads} > {log} 2>&1
+        touch {output.dataprep_done}
         echo "[K-CHOPORE] m6Anet dataprep completed for {wildcards.sample}."
         """
 
-# Step 4: m6Anet inference - detect m6A modifications
 rule m6anet_inference:
     input:
         dataprep_done="results/m6anet/{sample}/dataprep.done"
@@ -776,47 +605,34 @@ rule m6anet_inference:
         """
 
 # =============================================================
-# EPITRANSCRIPTOMIC MODIFICATION - xPore (Differential)
+# DIFFERENTIAL EXPRESSION - DESeq2 (2x2 Factorial)
 # =============================================================
 
-# xPore requires eventalign data from nanopolish for multiple conditions
-rule xpore_diffmod:
-    input:
-        eventalign=expand("results/nanopolish/{sample}_eventalign.txt", sample=SAMPLES)
+# Generate sample sheet TSV for DESeq2 from config
+rule generate_deseq2_sample_sheet:
     output:
-        table="results/xpore/diffmod.table"
-    params:
-        outdir="results/xpore",
-        min_reads=config["tools"]["xpore_min_reads"]
-    threads: THREADS
-    log:
-        "logs/xpore_diffmod.log"
-    shell:
-        """
-        mkdir -p {params.outdir} logs
-        echo "[K-CHOPORE] Running xPore differential modification analysis..."
-        # xPore requires a YAML config - generate it
-        cat > results/xpore/xpore_config.yml << 'XPORE_EOF'
-notes: K-CHOPORE xPore analysis
-out: {params.outdir}
-XPORE_EOF
-        xpore diffmod \
-            --config results/xpore/xpore_config.yml \
-            --n_processes {threads} > {log} 2>&1
-        echo "[K-CHOPORE] xPore analysis completed."
-        """
-
-# =============================================================
-# DIFFERENTIAL EXPRESSION - DESeq2
-# =============================================================
+        sample_sheet="results/deseq2/sample_sheet.tsv"
+    run:
+        with open(output.sample_sheet, 'w') as f:
+            f.write("sample\tgenotype\ttreatment\n")
+            for sample_id, info in SAMPLE_SHEET.items():
+                f.write(f"{sample_id}\t{info['genotype']}\t{info['treatment']}\n")
+        print(f"[K-CHOPORE] Generated DESeq2 sample sheet with {len(SAMPLE_SHEET)} samples.")
 
 rule run_deseq2:
     input:
-        counts="results/flair/counts_matrix.tsv"
+        counts="results/flair/counts_matrix.tsv",
+        sample_sheet="results/deseq2/sample_sheet.tsv"
     output:
-        results="results/deseq2/deseq2_results.csv",
-        ma_plot="results/deseq2/MA_plot.pdf",
-        volcano="results/deseq2/volcano_plot.pdf"
+        genotype="results/deseq2/deseq2_genotype_results.csv",
+        treatment="results/deseq2/deseq2_treatment_results.csv",
+        interaction="results/deseq2/deseq2_interaction_results.csv",
+        pca="results/deseq2/PCA_plot.pdf",
+        ma_genotype="results/deseq2/MA_plot_genotype.pdf",
+        ma_treatment="results/deseq2/MA_plot_treatment.pdf",
+        volcano_genotype="results/deseq2/volcano_genotype.pdf",
+        volcano_treatment="results/deseq2/volcano_treatment.pdf",
+        normalized="results/deseq2/normalized_counts.csv"
     params:
         padj=config["tools"]["deseq2_padj_threshold"],
         lfc=config["tools"]["deseq2_lfc_threshold"],
@@ -826,19 +642,13 @@ rule run_deseq2:
     shell:
         """
         mkdir -p {params.outdir} logs
-        echo "[K-CHOPORE] Running DESeq2 differential expression analysis..."
-        # DESeq2 requires biological replicates (>=2 samples per condition)
-        # If only 1 replicate per condition, create placeholder outputs
+        echo "[K-CHOPORE] Running DESeq2 factorial analysis (genotype x treatment)..."
         Rscript scripts/run_deseq2.R \
             {input.counts} \
+            {input.sample_sheet} \
             {params.outdir} \
             {params.padj} \
-            {params.lfc} > {log} 2>&1 || {{
-            echo "[K-CHOPORE] DESeq2 failed (likely insufficient replicates). See {log}" >> {log}
-            echo "gene,baseMean,log2FoldChange,lfcSE,stat,pvalue,padj" > {output.results}
-            echo "DESeq2 requires >=2 biological replicates per condition" >> {output.results}
-            touch {output.ma_plot} {output.volcano}
-        }}
+            {params.lfc} > {log} 2>&1
         echo "[K-CHOPORE] DESeq2 analysis completed."
         """
 
@@ -848,10 +658,10 @@ rule run_deseq2:
 
 rule multiqc:
     input:
-        nanoplot=expand("results/nanoplot/{sample}/NanoStats.txt", sample=SAMPLES) if config["params"].get("run_nanoplot", True) else [],
-        flagstat=expand("results/samtools_stats/{sample}_flagstat.txt", sample=SAMPLES),
-        stats=expand("results/samtools_stats/{sample}_stats.txt", sample=SAMPLES),
-        pycoqc=expand("results/quality_analysis/pycoQC_output_{sample}.html", sample=SAMPLES) if config["params"].get("run_pycoqc", True) else []
+        nanoplot=expand("results/nanoplot/{sample}/NanoStats.txt", sample=SAMPLE_IDS),
+        flagstat=expand("results/samtools_stats/{sample}_flagstat.txt", sample=SAMPLE_IDS),
+        stats=expand("results/samtools_stats/{sample}_stats.txt", sample=SAMPLE_IDS),
+        pycoqc=expand("results/quality_analysis/pycoQC_output_{sample}.html", sample=SAMPLE_IDS)
     output:
         report="results/multiqc/multiqc_report.html"
     params:

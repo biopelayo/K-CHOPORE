@@ -1,12 +1,3 @@
-import pysam
-import sys
-import os
-
-
-
-
-
-
 import os
 import pysam  # Asegura que pysam se cargue correctamente
 
