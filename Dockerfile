@@ -228,6 +228,16 @@ RUN Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.o
 RUN pip install --no-cache-dir flair-brookslab
 
 # ==============================================================
+# 19b. Pin pandas/numpy for ELIGOS2 compatibility
+# ==============================================================
+# ELIGOS2 uses pd.concat with strings (fixed in pandas 1.x, breaks in 2.x)
+# Must be installed AFTER all other Python packages to override their deps
+RUN pip install --no-cache-dir "pandas==1.5.3" "numpy<2.0"
+
+# Ensure setuptools < 71 for pycoQC compatibility (must be last pip install)
+RUN pip install --no-cache-dir "setuptools<71"
+
+# ==============================================================
 # 20. Set up workspace
 # ==============================================================
 WORKDIR /workspace
