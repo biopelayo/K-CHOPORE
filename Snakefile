@@ -527,11 +527,13 @@ rule generate_reads_manifest:
         manifest="results/flair/reads_manifest.tsv"
     run:
         with open(output.manifest, 'w') as f:
-            f.write("sample\tcondition\tbatch\tfastq_path\n")
+            # FLAIR quantify expects NO header line
+            # FLAIR does NOT allow underscores in id, condition, or batch fields
             for sample_id, info in SAMPLE_SHEET.items():
-                condition = f"{info['genotype']}_{info['treatment']}"
+                flair_id = sample_id.replace("_", "-")
+                condition = f"{info['genotype']}-{info['treatment']}".replace("_", "-")
                 fastq_path = f"results/fastq_filtered/{sample_id}_filtered.fastq"
-                f.write(f"{sample_id}\t{condition}\tbatch1\t{fastq_path}\n")
+                f.write(f"{flair_id}\t{condition}\tbatch1\t{fastq_path}\n")
         print(f"[K-CHOPORE] Generated reads manifest with {len(SAMPLE_SHEET)} samples.")
 
 rule flair_quantify:
@@ -585,7 +587,9 @@ rule run_eligos2:
         echo "[K-CHOPORE] Running ELIGOS2 for {wildcards.sample}..."
         # Strip Chr prefix from FLAIR BED to match BAM chromosome names (TAIR10: 1,2,3,4,5)
         sed 's/^Chr//' {input.region_bed} > {params.outdir}/region_fixed.bed
-        eligos2 rna_mod \
+
+        # Run ELIGOS2; if it fails (known CMH test issue), create empty output
+        if eligos2 rna_mod \
             -i {input.bam} \
             -reg {params.outdir}/region_fixed.bed \
             -ref {input.reference_genome} \
@@ -593,9 +597,22 @@ rule run_eligos2:
             --pval {params.pval} \
             --oddR {params.oddR} \
             --esb {params.esb} \
-            --threads {threads} > {log} 2>&1
-        cp {params.outdir}/*_baseExt0.txt {output.eligos_output}
-        echo "[K-CHOPORE] ELIGOS2 completed for {wildcards.sample}."
+            --min_depth 50 \
+            --threads {threads} > {log} 2>&1; then
+            # Success: copy the results
+            if ls {params.outdir}/*_baseExt0.txt 1>/dev/null 2>&1; then
+                cp {params.outdir}/*_baseExt0.txt {output.eligos_output}
+                echo "[K-CHOPORE] ELIGOS2 completed for {wildcards.sample}."
+            else
+                echo "[K-CHOPORE] ELIGOS2 ran but no baseExt0 output for {wildcards.sample}."
+                echo "# ELIGOS2: no significant modifications found" > {output.eligos_output}
+            fi
+        else
+            echo "[K-CHOPORE] WARNING: ELIGOS2 failed for {wildcards.sample} (see {log})"
+            echo "# ELIGOS2 FAILED - see logs/eligos2_{wildcards.sample}.log" > {output.eligos_output}
+            echo "# Error: CMH test failure (known rpy2/R issue)" >> {output.eligos_output}
+            echo "# This sample can be re-analyzed manually" >> {output.eligos_output}
+        fi
         """
 
 # =============================================================
@@ -710,7 +727,12 @@ rule generate_deseq2_sample_sheet:
         with open(output.sample_sheet, 'w') as f:
             f.write("sample\tgenotype\ttreatment\n")
             for sample_id, info in SAMPLE_SHEET.items():
-                f.write(f"{sample_id}\t{info['genotype']}\t{info['treatment']}\n")
+                # Sample names must match FLAIR counts_matrix column headers
+                # FLAIR uses: {flair_id}_{condition}_batch1 (hyphens within, underscores between)
+                flair_id = sample_id.replace("_", "-")
+                condition = f"{info['genotype']}-{info['treatment']}".replace("_", "-")
+                flair_col = f"{flair_id}_{condition}_batch1"
+                f.write(f"{flair_col}\t{info['genotype']}\t{info['treatment']}\n")
         print(f"[K-CHOPORE] Generated DESeq2 sample sheet with {len(SAMPLE_SHEET)} samples.")
 
 rule run_deseq2:

@@ -111,22 +111,46 @@ design_table <- table(coldata$genotype, coldata$treatment)
 cat("\n[K-CHOPORE] Replicates per group:\n")
 print(design_table)
 
-if (any(design_table < 2)) {
-  stop("[K-CHOPORE] ERROR: At least 2 replicates per group required for DESeq2.")
+# Choose design formula based on replication
+# Full factorial requires ≥2 replicates in every cell
+# If any cell has <2, use additive model (no interaction)
+use_interaction <- !any(design_table < 2)
+
+if (use_interaction) {
+  design_formula <- ~ genotype + treatment + genotype:treatment
+  cat("[K-CHOPORE] Full factorial design: ~ genotype + treatment + genotype:treatment\n")
+} else {
+  design_formula <- ~ genotype + treatment
+  cat("[K-CHOPORE] WARNING: Some groups have <2 replicates. Using additive model: ~ genotype + treatment\n")
+  cat("[K-CHOPORE] Interaction term omitted (insufficient replication). Re-run with all 12 samples for full factorial.\n")
+  underrep <- which(design_table < 2, arr.ind = TRUE)
+  for (i in seq_len(nrow(underrep))) {
+    cat(sprintf("[K-CHOPORE]   Group %s x %s has %d replicate(s)\n",
+                rownames(design_table)[underrep[i, 1]],
+                colnames(design_table)[underrep[i, 2]],
+                design_table[underrep[i, 1], underrep[i, 2]]))
+  }
+}
+
+# Require at least 2 replicates per genotype and per treatment (marginal)
+genotype_counts <- table(coldata$genotype)
+treatment_counts <- table(coldata$treatment)
+if (any(genotype_counts < 2) || any(treatment_counts < 2)) {
+  stop("[K-CHOPORE] ERROR: At least 2 samples per genotype and per treatment required for DESeq2.")
 }
 
 # -------------------------------------------------------------
-# DESeq2 factorial analysis
+# DESeq2 analysis
 # -------------------------------------------------------------
 
-# Create DESeq2 dataset with factorial design
+# Create DESeq2 dataset
 dds <- DESeqDataSetFromMatrix(
   countData = counts_matrix,
   colData = coldata,
-  design = ~ genotype + treatment + genotype:treatment
+  design = design_formula
 )
 
-cat("[K-CHOPORE] Running DESeq2 with design: ~ genotype + treatment + genotype:treatment\n")
+cat(sprintf("[K-CHOPORE] Running DESeq2 with design: %s\n", deparse(design_formula)))
 dds <- DESeq(dds)
 
 cat("[K-CHOPORE] Available result names:\n")
@@ -206,13 +230,18 @@ if (length(treatment_name) > 0) {
   cat("[K-CHOPORE] WARNING: No treatment contrast found in results.\n")
 }
 
-# 3. Interaction effect (genotype:treatment)
+# 3. Interaction effect (genotype:treatment) — only available with full factorial
 interaction_name <- grep("genotype.*treatment|treatment.*genotype", result_names, value = TRUE)
 if (length(interaction_name) > 0) {
   cat(sprintf("\n[K-CHOPORE] --- Interaction contrast: %s ---\n", interaction_name[1]))
   save_contrast_results(dds, interaction_name[1], "interaction", output_dir, padj_cutoff, lfc_cutoff)
 } else {
-  cat("[K-CHOPORE] WARNING: No interaction contrast found in results.\n")
+  cat("[K-CHOPORE] NOTE: Interaction term not in model (additive design used).\n")
+  cat("[K-CHOPORE] Creating empty interaction results file.\n")
+  write.csv(data.frame(gene = character(), log2FoldChange = numeric(),
+                        padj = numeric(), significant = character()),
+            file.path(output_dir, "deseq2_interaction_results.csv"),
+            row.names = FALSE)
 }
 
 # -------------------------------------------------------------
