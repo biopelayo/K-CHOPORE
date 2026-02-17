@@ -24,6 +24,18 @@ The pipeline integrates **Snakemake**, **Docker**, **Python**, and **R** with es
 
 ---
 
+### Current Experiment
+- **Organism**: *Arabidopsis thaliana* (TAIR10 genome + AtRTDv2 annotation)
+- **Sequencing**: ONT MinION, R9.4.1 flowcell, Direct RNA
+- **Design**: 2x2 factorial — Genotype (WT vs *anac017-1* mutant) x Treatment (Control vs Antimycin A)
+- **Replicates**: 3 biological replicates per group (12 samples total)
+- **Phase 1 Results** (10 pre-basecalled samples):
+  - 20,958 isoforms quantified across samples (FLAIR)
+  - 435 differentially expressed genes by genotype (padj < 0.05, |LFC| > 1)
+  - 266 differentially expressed genes by treatment (padj < 0.05, |LFC| > 1)
+
+---
+
 ## Table of Contents
 - [Pipeline Architecture](#pipeline-architecture)
 - [Integrated Tools](#integrated-tools)
@@ -138,7 +150,7 @@ Sorted BAM
 
 **Step 1: Clone the repository**
 ```bash
-git clone https://github.com/pelayovic/K-CHOPORE.git
+git clone https://github.com/biopelayo/K-CHOPORE.git
 cd K-CHOPORE
 ```
 
@@ -157,44 +169,52 @@ Edit `config/config.yml` to set your input paths, sample names, and enable/disab
 
 The main configuration file is `config/config.yml`. Key sections:
 
-### Samples
+### Samples (2x2 Factorial Design)
+Each sample has genotype, treatment, data type, and NAS directory metadata:
 ```yaml
 samples:
-  - "WT_C_R1"
-  - "WT_C_R2"
-
-conditions:
-  WT_C_R1: "control"
-  WT_C_R2: "control"
+  WT_C_R1:
+    genotype: "WT"
+    treatment: "C"
+    data_type: "fastq"           # "fastq" (pre-basecalled) or "fast5" (needs basecalling)
+    nas_dirs: ["WT_C_R1"]
+    run_subdirs: ["no_sample/20220224_1639_MC-112869_FAR90122_f656439d"]
+  anac017_1_AA_R2:
+    genotype: "anac017_1"
+    treatment: "AA"
+    data_type: "fast5"
+    nas_dirs: ["anac017-1_AA_R2", "anac017_AA_R2-2"]  # Multiple runs merged
+    run_subdirs:
+      - "no_sample/20220930_1148_MC-112869_FAR81498_9fdc7765"
+      - "no_sample/20221215_1232_MC-112869_FAT21048_d754e27f"
 ```
+
+**Note:** Sample IDs use underscores (`anac017_1`) while NAS folder names use hyphens (`anac017-1`). The pipeline handles this mapping automatically.
 
 ### Tool Settings (Direct RNA-seq optimized)
 ```yaml
 tools:
-  basecaller: "dorado"
-  dorado_model: "rna004_130bps_hac@v5.0.0"     # Direct RNA model
+  basecaller: "guppy"
+  guppy_config_file: "/opt/ont-guppy-cpu/data/rna_r9.4.1_70bps_hac.cfg"
   minimap2_preset: "splice"                       # Splice-aware alignment
   minimap2_kmer_size: 14                          # k=14 for RNA
   minimap2_extra_flags: "--secondary=no --MD"
   nanofilt_min_quality: 7
   nanofilt_min_length: 200
+  flair_support: 3
+  eligos2_pval: 0.05
+  eligos2_oddR: 2.5
+  eligos2_esb: 0.1
+  deseq2_padj_threshold: 0.05
+  deseq2_lfc_threshold: 1.0
 ```
 
-### Module Toggles
+### Key Parameters
 ```yaml
 params:
-  run_basecalling: false    # Set true if starting from FAST5/POD5
-  run_nanofilt: true        # Read quality filtering
-  run_nanoplot: true        # Per-sample QC plots
-  run_nanocomp: true        # Cross-sample comparison
-  run_pycoqc: true          # pycoQC report
-  run_flair: true           # Isoform analysis
-  run_stringtie: false      # StringTie2 (alternative to FLAIR)
-  run_eligos2: true         # ELIGOS2 modification detection
-  run_m6anet: true          # m6Anet m6A detection
-  run_xpore: false          # xPore differential modification
-  run_deseq2: true          # DESeq2 differential expression
-  run_multiqc: true         # Aggregate QC report
+  threads: 40                 # Adjust for your server
+  latency_wait: 60            # Helps with NFS/NTFS mount delays
+  run_m6anet: false           # Requires FAST5 on local disk (~644 GB)
 ```
 
 ---
@@ -203,29 +223,42 @@ params:
 
 ### Full pipeline via Docker
 ```bash
-sudo docker run -it --rm \
-    -v /path/to/your/local/data:/workspace \
-    k-chopore \
-    snakemake --snakefile /workspace/Snakefile \
-    --configfile /workspace/config/config.yml \
-    --cores 12 --latency-wait 30 --printshellcmds
+# Phase 1: 10 pre-basecalled samples (FASTQ only)
+docker run --rm \
+    -v "$(pwd)":/workspace \
+    -w /workspace \
+    k-chopore:latest \
+    snakemake --cores 40 --latency-wait 60 --printshellcmds --keep-going
+
+# Full 12-sample run (requires FAST5 data on local disk)
+# First update config.yml to use config/config.yml (full config)
+docker run --rm \
+    -v "$(pwd)":/workspace \
+    -w /workspace \
+    k-chopore:latest \
+    snakemake --cores 40 --latency-wait 60 --printshellcmds --keep-going
 ```
 
 ### Run a specific rule
 ```bash
-# Only alignment
-snakemake --cores 12 results/sorted_bam/WT_C_R1_sorted.bam
+# Only alignment for one sample
+docker run --rm -v "$(pwd)":/workspace -w /workspace k-chopore:latest \
+    snakemake --cores 12 results/sorted_bam/WT_C_R1_sorted.bam
 
-# Only NanoPlot QC
-snakemake --cores 4 results/nanoplot/WT_C_R1/NanoStats.txt
+# Only DESeq2 analysis
+docker run --rm -v "$(pwd)":/workspace -w /workspace k-chopore:latest \
+    Rscript scripts/run_deseq2.R results/flair/counts_matrix.tsv \
+    results/deseq2/sample_sheet.tsv results/deseq2 0.05 1.0
 
-# Only m6Anet
-snakemake --cores 12 results/m6anet/WT_C_R1/data.result.csv.gz
+# Only m6Anet for one sample (requires FAST5 on disk)
+docker run --rm -v "$(pwd)":/workspace -w /workspace k-chopore:latest \
+    snakemake --cores 12 results/m6anet/WT_C_R1/data.site_proba.csv
 ```
 
 ### Dry run (check what will be executed)
 ```bash
-snakemake -n --printshellcmds
+docker run --rm -v "$(pwd)":/workspace -w /workspace k-chopore:latest \
+    snakemake -n --printshellcmds
 ```
 
 ---
@@ -284,10 +317,12 @@ Uses splice-aware alignment mode critical for direct RNA-seq:
 **xPore**: Differential RNA modification detection between two conditions using nanopolish eventalign data. Identifies positions with significantly different modification rates.
 
 ### 8. Differential Expression (DESeq2)
-Statistical differential expression analysis from FLAIR counts matrix:
-- Generates results CSV with log2FC, p-values, adjusted p-values
-- MA plot, volcano plot, and PCA plot
-- Handles single-condition gracefully (descriptive stats only)
+Statistical differential expression analysis from FLAIR counts matrix using a **2x2 factorial design** (genotype x treatment):
+- Full factorial model: `~ genotype + treatment + genotype:treatment` (when all groups have >=2 replicates)
+- Additive model: `~ genotype + treatment` (automatically used when any group has <2 replicates)
+- Extracts three contrasts: genotype effect, treatment effect, and interaction
+- Generates MA plots, volcano plots, and PCA plot (colored by genotype, shaped by treatment)
+- Reference levels: WT (genotype), C (treatment)
 
 ### 9. MultiQC Aggregation
 Combines outputs from NanoPlot, samtools, pycoQC, and other tools into a single interactive HTML report.
@@ -299,40 +334,37 @@ Combines outputs from NanoPlot, samtools, pycoQC, and other tools into a single 
 ```
 K-CHOPORE/
 ├── config/
-│   └── config.yml              # Main pipeline configuration
+│   ├── config.yml              # Full 12-sample configuration
+│   └── config_phase1.yml       # Phase 1: 10 FASTQ-only samples
 ├── data/
-│   ├── raw/
-│   │   ├── fastq/              # Input FASTQ files
-│   │   ├── fast5/              # Raw FAST5 files (legacy)
-│   │   ├── pod5/               # Raw POD5 files (modern)
-│   │   └── summaries/          # ONT sequencing summaries
+│   ├── raw/                    # Input data (per-sample subdirectories)
 │   └── reference/
-│       ├── genome/             # Reference genome FASTA
-│       ├── annotations/        # GTF/BED annotation files
+│       ├── genome/             # TAIR10 reference genome FASTA + minimap2 index
+│       ├── annotations/        # AtRTDv2 GTF annotation
 │       └── transcriptome/      # Transcriptome FASTA
 ├── results/                    # All pipeline outputs
-│   ├── basecalls/              # Basecalling output
+│   ├── basecalls/              # Basecalling output (FASTQ + sequencing summaries)
 │   ├── fastq_filtered/         # NanoFilt filtered reads
-│   ├── nanoplot/               # NanoPlot QC reports
-│   ├── nanocomp/               # NanoComp comparison
-│   ├── mapped/                 # SAM alignment files
+│   ├── nanoplot/               # NanoPlot QC reports (per sample)
+│   ├── nanocomp/               # NanoComp cross-sample comparison
 │   ├── sorted_bam/             # Sorted + indexed BAM files
-│   ├── samtools_stats/         # Alignment statistics
+│   ├── samtools_stats/         # Alignment statistics (flagstat + stats)
 │   ├── quality_analysis/       # pycoQC HTML reports
-│   ├── flair/                  # FLAIR isoform results
-│   ├── stringtie/              # StringTie2 isoform results
+│   ├── flair/                  # FLAIR isoform results + counts_matrix.tsv
 │   ├── eligos/                 # ELIGOS2 modification results
 │   ├── nanopolish/             # Nanopolish eventalign output
 │   ├── m6anet/                 # m6Anet m6A predictions
-│   ├── xpore/                  # xPore differential modification
 │   ├── deseq2/                 # DESeq2 DE results + plots
 │   └── multiqc/                # MultiQC aggregate report
 ├── scripts/
-│   ├── run_deseq2.R            # DESeq2 analysis script
-│   ├── alignment/              # Alignment helper scripts
-│   └── pipelines/              # Legacy pipeline scripts
+│   ├── run_deseq2.R            # DESeq2 factorial analysis (handles unbalanced designs)
+│   ├── fix_eligos2.py          # ELIGOS2 compatibility fix (applied during Docker build)
+│   ├── download_last_fast5.py  # FAST5 download utility (NAS -> local)
+│   └── transfer_v4_twostep.py  # Two-step data transfer (NAS -> local -> server)
 ├── Snakefile                   # Main Snakemake workflow
-├── Dockerfile                  # Docker build file
+├── Dockerfile                  # Docker build file (22.7 GB image with all tools)
+├── run_pipeline.sh             # Pipeline launcher script
+├── deploy_server.sh            # Server deployment script
 ├── requirements.txt            # Python dependencies
 └── README.md
 ```
@@ -342,10 +374,13 @@ K-CHOPORE/
 ## Troubleshooting
 
 - **Minimap2 alignment issues**: Ensure you use `-ax splice -uf` for direct RNA data (not `map-ont`). The `-uf` flag is critical as direct RNA reads are in the forward orientation.
-- **m6Anet fails**: Requires Nanopolish eventalign with `--signal-index --scale-events` flags. FAST5 files must be accessible.
-- **FLAIR correct fails**: Ensure GTF chromosome names match the reference genome FASTA headers.
-- **DESeq2 single condition**: The script handles gracefully when only one condition is present (outputs descriptive stats).
-- **Memory issues**: For large datasets, increase Docker memory allocation and thread count in `config.yml`.
+- **FLAIR underscore restriction**: FLAIR quantify does NOT allow underscores in sample ID, condition, or batch fields of the reads manifest. The pipeline automatically converts underscores to hyphens in the manifest while keeping file paths unchanged.
+- **FLAIR correct fails**: Ensure GTF chromosome names match the reference genome FASTA headers. The pipeline strips `Chr` prefixes from FLAIR BED files to match TAIR10 numeric chromosome names.
+- **ELIGOS2 CMH test failure**: Known rpy2/R compatibility issue in the Docker image causes ELIGOS2 to fail with `error testCMH` on all samples. The pipeline handles this gracefully by creating placeholder output files. This requires investigation of the R/rpy2 bridge in the Docker environment.
+- **DESeq2 unbalanced design**: When any group in the 2x2 factorial has fewer than 2 replicates, the R script automatically falls back to an additive model (`~ genotype + treatment`), omitting the interaction term. Re-run with all 12 samples for the full factorial analysis.
+- **m6Anet disk requirements**: m6Anet requires FAST5 files on local disk (~644 GB for this experiment). Set `run_m6anet: false` unless FAST5 data fits on local storage.
+- **Docker on NTFS**: Use `--latency-wait 60` for Snakemake when running Docker volumes on NTFS. Directory creation can be slow.
+- **Guppy CPU basecalling**: Very slow without GPU (days per sample). Consider using `--keep-going` so other pipeline steps can proceed while basecalling runs.
 - **Check logs**: All rules write detailed logs to the `logs/` directory.
 
 ---
@@ -374,13 +409,23 @@ If you use K-CHOPORE, please cite the integrated tools:
 ## Limitations
 
 ### Basecalling Bottlenecks
-Basecalling with Dorado/Guppy can be compute-intensive, especially without GPU acceleration. The Docker image includes CPU versions; GPU support requires NVIDIA Docker runtime.
+Basecalling with Guppy CPU is extremely slow (days per sample on a 40-thread server without GPU). The Docker image includes the CPU version; GPU support requires NVIDIA Docker runtime and significantly reduces processing time.
 
 ### Signal-Level Analysis Requirements
-m6Anet and xPore require raw FAST5 files and Nanopolish eventalign, which generates large intermediate files. Plan for sufficient disk space.
+m6Anet and xPore require raw FAST5 files and Nanopolish eventalign, which generates large intermediate files. For this experiment, FAST5 data totals ~644 GB. Plan for sufficient local disk space or use SSHFS to mount remote storage.
 
-### Single-Condition Support
-DESeq2 differential expression requires at least two conditions. The pipeline gracefully degrades to descriptive statistics with a single condition.
+### ELIGOS2 Known Issue
+The ELIGOS2 CMH (Cochran-Mantel-Haenszel) statistical test fails in the current Docker environment due to an rpy2/R compatibility issue. The pipeline creates placeholder output files when this occurs. This is a known issue that requires rebuilding the Docker image with updated R/rpy2 packages.
+
+### Unbalanced Factorial Design
+When running with fewer than 12 samples (e.g., Phase 1 with 10 FASTQ-only samples), some groups may have insufficient replicates for the full interaction model. The DESeq2 script automatically uses an additive model in these cases.
+
+## Phased Execution
+
+The pipeline supports phased execution for experiments where some samples require basecalling:
+
+- **Phase 1** (`config/config_phase1.yml`): Process pre-basecalled FASTQ samples only (10 samples). Produces per-sample QC, FLAIR isoform analysis, and DESeq2 differential expression with an additive model.
+- **Phase 2** (`config/config.yml`): Full 12-sample analysis including FAST5 basecalling, complete factorial DESeq2, and signal-level modification detection (m6Anet).
 
 ---
 
