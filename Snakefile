@@ -2,8 +2,11 @@
 # K-CHOPORE Pipeline - Snakemake Workflow
 # =============================================================
 # ONT Direct RNA Sequencing analysis pipeline:
-# pre-basecalled FASTQ / FAST5 basecalling -> QC -> alignment ->
-# isoforms -> epitranscriptomic modifications -> differential expression
+# Pre-basecalled FASTQ -> QC -> alignment -> isoforms ->
+# epitranscriptomic modifications -> differential expression
+#
+# 10 samples, 2x2 factorial: WT vs anac017-1 x Control vs AA
+# Arabidopsis thaliana (TAIR10 + AtRTDv2)
 #
 # Created by Pelayo Gonzalez de Lena Rodriguez, MSc
 # FPI Severo Ochoa Fellow
@@ -33,18 +36,8 @@ MINIMAP2_PRESET = config["tools"]["minimap2_preset"]
 MINIMAP2_KMER = config["tools"]["minimap2_kmer_size"]
 MINIMAP2_EXTRA = config["tools"]["minimap2_extra_flags"]
 
-# Classify samples by data type
-FASTQ_SAMPLES = [s for s in SAMPLE_IDS if SAMPLE_SHEET[s]["data_type"] == "fastq"]
-FAST5_SAMPLES = [s for s in SAMPLE_IDS if SAMPLE_SHEET[s]["data_type"] == "fast5"]
-
-# Samples with FAST5 data available (for signal-level analysis)
-# Pre-basecalled samples have fast5_pass/, FAST5-only samples have fast5/
-SAMPLES_WITH_FAST5 = SAMPLE_IDS  # All samples have FAST5 on NAS
-
-# m6Anet requires FAST5 data on disk (~55 GB per sample).
-# Since total FAST5 is ~644 GB and server has ~234 GB free,
-# m6Anet is run separately per-sample (use: snakemake results/m6anet/SAMPLE/data.site_proba.csv)
-# Set RUN_M6ANET=True to include in main pipeline (only if FAST5 data is available locally)
+# m6Anet requires FAST5 data on local disk.
+# Set run_m6anet: true in config only if FAST5 data is available locally.
 RUN_M6ANET = config.get("params", {}).get("run_m6anet", False)
 
 # Helper functions
@@ -63,11 +56,7 @@ def get_raw_fast5_dirs(sample):
     nas_dirs = SAMPLE_SHEET[sample]["nas_dirs"]
     run_subdirs = SAMPLE_SHEET[sample]["run_subdirs"]
     for nas_dir, run_subdir in zip(nas_dirs, run_subdirs):
-        # Pre-basecalled samples have fast5_pass/, FAST5-only have fast5/
-        if SAMPLE_SHEET[sample]["data_type"] == "fastq":
-            dirs.append(os.path.join(RAW_DATA_DIR, nas_dir, run_subdir, "fast5_pass"))
-        else:
-            dirs.append(os.path.join(RAW_DATA_DIR, nas_dir, run_subdir, "fast5"))
+        dirs.append(os.path.join(RAW_DATA_DIR, nas_dir, run_subdir, "fast5_pass"))
     return dirs
 
 def get_raw_summary_files(sample):
@@ -88,8 +77,6 @@ def get_treatment(sample):
 
 # Print configuration
 print(f"[K-CHOPORE] Samples ({len(SAMPLE_IDS)}): {SAMPLE_IDS}")
-print(f"[K-CHOPORE]   Pre-basecalled (FASTQ): {FASTQ_SAMPLES}")
-print(f"[K-CHOPORE]   Need basecalling (FAST5): {FAST5_SAMPLES}")
 print(f"[K-CHOPORE] Reference: {REFERENCE_GENOME}")
 print(f"[K-CHOPORE] Raw data: {RAW_DATA_DIR}")
 print(f"[K-CHOPORE] Threads: {THREADS}")
@@ -132,10 +119,9 @@ rule all:
 # =============================================================
 # PREPARE READS - Merge pre-basecalled FASTQs
 # =============================================================
-# For samples with pre-basecalled data (data_type: "fastq"):
-#   Decompress and concatenate all *.fastq.gz from fastq_pass/
-# For samples needing basecalling (data_type: "fast5"):
-#   Run Guppy basecaller on FAST5 data
+# All 10 samples have pre-basecalled data (data_type: "fastq").
+# This rule decompresses and concatenates all *.fastq.gz from fastq_pass/
+# into a single FASTQ per sample.
 
 rule prepare_fastq:
     """Merge pre-basecalled gzipped FASTQs into a single FASTQ per sample."""
@@ -144,85 +130,34 @@ rule prepare_fastq:
         summary="results/basecalls/{sample}_sequencing_summary.txt"
     params:
         fastq_dirs=lambda wildcards: get_raw_fastq_dirs(wildcards.sample),
-        summary_dirs=lambda wildcards: get_raw_summary_files(wildcards.sample),
-        data_type=lambda wildcards: SAMPLE_SHEET[wildcards.sample]["data_type"],
-        guppy_cfg=config["tools"]["guppy_config_file"],
-        fast5_dirs=lambda wildcards: get_raw_fast5_dirs(wildcards.sample),
-        tmpdir="results/basecalls/tmp_{sample}"
-    threads: THREADS
+        summary_dirs=lambda wildcards: get_raw_summary_files(wildcards.sample)
+    threads: 1
     log:
         "logs/prepare_reads_{sample}.log"
     shell:
         """
         mkdir -p results/basecalls logs
+        echo "[K-CHOPORE] Merging pre-basecalled FASTQs for {wildcards.sample}..."
 
-        if [ "{params.data_type}" = "fastq" ]; then
-            # =====================================================
-            # PRE-BASECALLED: decompress and concatenate FASTQs
-            # =====================================================
-            echo "[K-CHOPORE] Merging pre-basecalled FASTQs for {wildcards.sample}..."
+        # Concatenate all gzipped FASTQs from all fastq_pass directories
+        > {output.fastq}
+        for fq_dir in {params.fastq_dirs}; do
+            echo "[K-CHOPORE]   Processing: $fq_dir"
+            if ls "$fq_dir"/*.fastq.gz 1>/dev/null 2>&1; then
+                zcat "$fq_dir"/*.fastq.gz >> {output.fastq}
+            elif ls "$fq_dir"/*.fastq 1>/dev/null 2>&1; then
+                cat "$fq_dir"/*.fastq >> {output.fastq}
+            else
+                echo "[K-CHOPORE]   WARNING: No FASTQ files found in $fq_dir"
+            fi
+        done
 
-            # Concatenate all gzipped FASTQs from all fastq_pass directories
-            > {output.fastq}
-            for fq_dir in {params.fastq_dirs}; do
-                echo "[K-CHOPORE]   Processing: $fq_dir"
-                if ls "$fq_dir"/*.fastq.gz 1>/dev/null 2>&1; then
-                    zcat "$fq_dir"/*.fastq.gz >> {output.fastq}
-                elif ls "$fq_dir"/*.fastq 1>/dev/null 2>&1; then
-                    cat "$fq_dir"/*.fastq >> {output.fastq}
-                else
-                    echo "[K-CHOPORE]   WARNING: No FASTQ files found in $fq_dir"
-                fi
-            done
-
-            # Merge sequencing summaries (header from first, data from rest)
-            first=true
-            for summary_dir in {params.summary_dirs}; do
-                for summary_file in "$summary_dir"/sequencing_summary_*.txt; do
-                    if [ -f "$summary_file" ]; then
-                        echo "[K-CHOPORE]   Summary: $summary_file"
-                        if $first; then
-                            cat "$summary_file" > {output.summary}
-                            first=false
-                        else
-                            tail -n +2 "$summary_file" >> {output.summary}
-                        fi
-                    fi
-                done
-            done
-
-            echo "[K-CHOPORE] Merge completed for {wildcards.sample}."
-            echo "[K-CHOPORE]   Reads: $(( $(wc -l < {output.fastq}) / 4 ))"
-
-        else
-            # =====================================================
-            # FAST5-ONLY: basecall with Guppy
-            # =====================================================
-            echo "[K-CHOPORE] Basecalling {wildcards.sample} with Guppy..."
-            mkdir -p {params.tmpdir}
-
-            dir_count=0
-            for fast5_dir in {params.fast5_dirs}; do
-                dir_count=$((dir_count + 1))
-                outdir="{params.tmpdir}/run_${{dir_count}}"
-                mkdir -p "$outdir"
-                echo "[K-CHOPORE]   Basecalling directory $dir_count: $fast5_dir"
-                guppy_basecaller \
-                    -i "$fast5_dir" \
-                    -s "$outdir" \
-                    -c {params.guppy_cfg} \
-                    --num_callers {threads} \
-                    --recursive >> {log} 2>&1
-            done
-
-            # Concatenate all pass FASTQs
-            echo "[K-CHOPORE] Merging basecalled reads..."
-            cat {params.tmpdir}/run_*/pass/*.fastq > {output.fastq}
-
-            # Merge sequencing summaries
-            first=true
-            for summary_file in {params.tmpdir}/run_*/sequencing_summary.txt; do
+        # Merge sequencing summaries (header from first, data from rest)
+        first=true
+        for summary_dir in {params.summary_dirs}; do
+            for summary_file in "$summary_dir"/sequencing_summary_*.txt; do
                 if [ -f "$summary_file" ]; then
+                    echo "[K-CHOPORE]   Summary: $summary_file"
                     if $first; then
                         cat "$summary_file" > {output.summary}
                         first=false
@@ -231,12 +166,10 @@ rule prepare_fastq:
                     fi
                 fi
             done
+        done
 
-            rm -rf {params.tmpdir}
-
-            echo "[K-CHOPORE] Basecalling completed for {wildcards.sample}."
-            echo "[K-CHOPORE]   Reads: $(( $(wc -l < {output.fastq}) / 4 ))"
-        fi
+        echo "[K-CHOPORE] Merge completed for {wildcards.sample}."
+        echo "[K-CHOPORE]   Reads: $(( $(wc -l < {output.fastq}) / 4 ))"
         """
 
 # =============================================================

@@ -28,8 +28,9 @@ The pipeline integrates **Snakemake**, **Docker**, **Python**, and **R** with es
 - **Organism**: *Arabidopsis thaliana* (TAIR10 genome + AtRTDv2 annotation)
 - **Sequencing**: ONT MinION, R9.4.1 flowcell, Direct RNA
 - **Design**: 2x2 factorial — Genotype (WT vs *anac017-1* mutant) x Treatment (Control vs Antimycin A)
-- **Replicates**: 3 biological replicates per group (12 samples total)
-- **Phase 1 Results** (10 pre-basecalled samples):
+- **Samples**: 10 (WT×C: 3, WT×AA: 3, anac017-1×C: 3, anac017-1×AA: 1)
+- **DESeq2 model**: Additive (`~ genotype + treatment`) due to unbalanced design
+- **Results**:
   - 20,958 isoforms quantified across samples (FLAIR)
   - 435 differentially expressed genes by genotype (padj < 0.05, |LFC| > 1)
   - 266 differentially expressed genes by treatment (padj < 0.05, |LFC| > 1)
@@ -176,20 +177,20 @@ samples:
   WT_C_R1:
     genotype: "WT"
     treatment: "C"
-    data_type: "fastq"           # "fastq" (pre-basecalled) or "fast5" (needs basecalling)
+    data_type: "fastq"
     nas_dirs: ["WT_C_R1"]
     run_subdirs: ["no_sample/20220224_1639_MC-112869_FAR90122_f656439d"]
-  anac017_1_AA_R2:
-    genotype: "anac017_1"
+  WT_AA_R3:
+    genotype: "WT"
     treatment: "AA"
-    data_type: "fast5"
-    nas_dirs: ["anac017-1_AA_R2", "anac017_AA_R2-2"]  # Multiple runs merged
+    data_type: "fastq"
+    nas_dirs: ["WT_AA_R3", "WT_AA_R3_2"]  # Multiple runs merged
     run_subdirs:
-      - "no_sample/20220930_1148_MC-112869_FAR81498_9fdc7765"
-      - "no_sample/20221215_1232_MC-112869_FAT21048_d754e27f"
+      - "no_sample/20220315_1614_MC-112869_FAR90098_c891954b"
+      - "no_sample/20220316_1636_MC-112869_FAR90098_6e408c50"
 ```
 
-**Note:** Sample IDs use underscores (`anac017_1`) while NAS folder names use hyphens (`anac017-1`). The pipeline handles this mapping automatically.
+**Note:** Sample IDs use underscores (`anac017_1`) while NAS folder names use hyphens (`anac017-1`). The pipeline converts underscores to hyphens automatically for FLAIR compatibility.
 
 ### Tool Settings (Direct RNA-seq optimized)
 ```yaml
@@ -223,15 +224,6 @@ params:
 
 ### Full pipeline via Docker
 ```bash
-# Phase 1: 10 pre-basecalled samples (FASTQ only)
-docker run --rm \
-    -v "$(pwd)":/workspace \
-    -w /workspace \
-    k-chopore:latest \
-    snakemake --cores 40 --latency-wait 60 --printshellcmds --keep-going
-
-# Full 12-sample run (requires FAST5 data on local disk)
-# First update config.yml to use config/config.yml (full config)
 docker run --rm \
     -v "$(pwd)":/workspace \
     -w /workspace \
@@ -334,8 +326,7 @@ Combines outputs from NanoPlot, samtools, pycoQC, and other tools into a single 
 ```
 K-CHOPORE/
 ├── config/
-│   ├── config.yml              # Full 12-sample configuration
-│   └── config_phase1.yml       # Phase 1: 10 FASTQ-only samples
+│   └── config.yml              # Pipeline configuration (10 samples)
 ├── data/
 │   ├── raw/                    # Input data (per-sample subdirectories)
 │   └── reference/
@@ -377,7 +368,7 @@ K-CHOPORE/
 - **FLAIR underscore restriction**: FLAIR quantify does NOT allow underscores in sample ID, condition, or batch fields of the reads manifest. The pipeline automatically converts underscores to hyphens in the manifest while keeping file paths unchanged.
 - **FLAIR correct fails**: Ensure GTF chromosome names match the reference genome FASTA headers. The pipeline strips `Chr` prefixes from FLAIR BED files to match TAIR10 numeric chromosome names.
 - **ELIGOS2 CMH test failure**: Known rpy2/R compatibility issue in the Docker image causes ELIGOS2 to fail with `error testCMH` on all samples. The pipeline handles this gracefully by creating placeholder output files. This requires investigation of the R/rpy2 bridge in the Docker environment.
-- **DESeq2 unbalanced design**: When any group in the 2x2 factorial has fewer than 2 replicates, the R script automatically falls back to an additive model (`~ genotype + treatment`), omitting the interaction term. Re-run with all 12 samples for the full factorial analysis.
+- **DESeq2 unbalanced design**: When any group in the 2x2 factorial has fewer than 2 replicates, the R script automatically falls back to an additive model (`~ genotype + treatment`), omitting the interaction term.
 - **m6Anet disk requirements**: m6Anet requires FAST5 files on local disk (~644 GB for this experiment). Set `run_m6anet: false` unless FAST5 data fits on local storage.
 - **Docker on NTFS**: Use `--latency-wait 60` for Snakemake when running Docker volumes on NTFS. Directory creation can be slow.
 - **Guppy CPU basecalling**: Very slow without GPU (days per sample). Consider using `--keep-going` so other pipeline steps can proceed while basecalling runs.
@@ -418,14 +409,7 @@ m6Anet and xPore require raw FAST5 files and Nanopolish eventalign, which genera
 The ELIGOS2 CMH (Cochran-Mantel-Haenszel) statistical test fails in the current Docker environment due to an rpy2/R compatibility issue. The pipeline creates placeholder output files when this occurs. This is a known issue that requires rebuilding the Docker image with updated R/rpy2 packages.
 
 ### Unbalanced Factorial Design
-When running with fewer than 12 samples (e.g., Phase 1 with 10 FASTQ-only samples), some groups may have insufficient replicates for the full interaction model. The DESeq2 script automatically uses an additive model in these cases.
-
-## Phased Execution
-
-The pipeline supports phased execution for experiments where some samples require basecalling:
-
-- **Phase 1** (`config/config_phase1.yml`): Process pre-basecalled FASTQ samples only (10 samples). Produces per-sample QC, FLAIR isoform analysis, and DESeq2 differential expression with an additive model.
-- **Phase 2** (`config/config.yml`): Full 12-sample analysis including FAST5 basecalling, complete factorial DESeq2, and signal-level modification detection (m6Anet).
+The anac017-1 x AA group has only 1 replicate (R2 and R3 required GPU basecalling and were excluded). The DESeq2 R script detects this automatically and uses an additive model (`~ genotype + treatment`) instead of the full factorial, omitting the interaction term.
 
 ---
 

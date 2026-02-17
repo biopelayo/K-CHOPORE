@@ -2,8 +2,8 @@
 # K-CHOPORE Configuration File
 # Pipeline for ONT Direct RNA Sequencing Analysis
 # =============================================================
-# Experiment: anac017 mutant vs WT, Control vs Antimycin A (AA)
-# 2x2 factorial design, 3 biological replicates per group
+# Experiment: anac017-1 mutant vs WT, Control vs Antimycin A (AA)
+# 2x2 factorial design (unbalanced: 3+3+3+1 = 10 samples)
 # Organism: Arabidopsis thaliana (TAIR10 + AtRTDv2)
 # Sequencing: ONT MinION, R9.4.1 flowcell, Direct RNA
 # =============================================================
@@ -11,13 +11,11 @@
 # -------------------------------------------------------------
 # SAMPLE SHEET
 # Each sample has: genotype, treatment, data_type, and source dirs
-# data_type: "fastq" (pre-basecalled) or "fast5" (needs basecalling)
-# fastq_dirs: NAS folder names containing fastq_pass/ subdirs
-# fast5_dirs: NAS folder names containing fast5/ or fast5_pass/ subdirs
-# Sample IDs use underscores only (FLAIR requirement)
+# Sample IDs use underscores only (FLAIR requires hyphens in manifest,
+# the pipeline converts automatically)
 # -------------------------------------------------------------
 samples:
-  # --- Wild Type, Control ---
+  # --- Wild Type, Control (3 replicates) ---
   WT_C_R1:
     genotype: "WT"
     treatment: "C"
@@ -37,7 +35,7 @@ samples:
     nas_dirs: ["WT_C_R3"]
     run_subdirs: ["no_sample/20220301_1656_MC-112869_FAR90189_a35665b9"]
 
-  # --- Wild Type, Antimycin A ---
+  # --- Wild Type, Antimycin A (3 replicates) ---
   WT_AA_R1:
     genotype: "WT"
     treatment: "AA"
@@ -59,7 +57,7 @@ samples:
       - "no_sample/20220315_1614_MC-112869_FAR90098_c891954b"
       - "no_sample/20220316_1636_MC-112869_FAR90098_6e408c50"
 
-  # --- anac017-1 mutant, Control ---
+  # --- anac017-1 mutant, Control (3 replicates) ---
   anac017_1_C_R1:
     genotype: "anac017_1"
     treatment: "C"
@@ -79,36 +77,21 @@ samples:
     nas_dirs: ["anac017-1_C_R3"]
     run_subdirs: ["no_sample/20220405_1610_MC-112869_FAR91811_d5fba51e"]
 
-  # --- anac017-1 mutant, Antimycin A ---
+  # --- anac017-1 mutant, Antimycin A (1 replicate) ---
+  # Only R1 has pre-basecalled FASTQ data
+  # R2 and R3 had FAST5-only data requiring GPU basecalling (excluded)
   anac017_1_AA_R1:
     genotype: "anac017_1"
     treatment: "AA"
     data_type: "fastq"
     nas_dirs: ["anac017-1_AA_R1"]
     run_subdirs: ["no_sample/20220328_1730_MC-112869_FAR90074_970aa1f5"]
-  anac017_1_AA_R2:
-    genotype: "anac017_1"
-    treatment: "AA"
-    data_type: "fast5"
-    nas_dirs: ["anac017-1_AA_R2", "anac017_AA_R2-2"]
-    run_subdirs:
-      - "no_sample/20220930_1148_MC-112869_FAR81498_9fdc7765"
-      - "no_sample/20221215_1232_MC-112869_FAT21048_d754e27f"
-  anac017_1_AA_R3:
-    genotype: "anac017_1"
-    treatment: "AA"
-    data_type: "fast5"
-    nas_dirs: ["anac017-1_AA_R3"]
-    run_subdirs: ["no_sample/20220929_1527_MC-112869_FAU09642_5f85f08b"]
 
 # -------------------------------------------------------------
 # INPUT FILES AND DIRECTORIES
 # -------------------------------------------------------------
 input_files:
-  # Local data directories (downloaded from NAS)
   raw_data_dir: "data/raw"
-
-  # Reference genome and annotations
   reference_genome: "data/reference/genome/TAIR10_chr_all.fas.fasta"
   reference_genome_mmi: "data/reference/genome/TAIR10_chr_all.fas.fasta.mmi"
   gtf_file: "data/reference/annotations/AtRTDv2_QUASI_19April2016.gtf"
@@ -125,8 +108,7 @@ output:
 # TOOL CONFIGURATIONS
 # -------------------------------------------------------------
 tools:
-  # Basecalling - Guppy CPU (R9.4.1 flowcell, direct RNA)
-  # Only used for 3 FAST5-only samples (anac017_1_AA_R2, anac017_1_AA_R3)
+  # Basecalling (not used — all 10 samples have pre-basecalled FASTQs)
   basecaller: "guppy"
   guppy_config_file: "/opt/ont-guppy-cpu/data/rna_r9.4.1_70bps_hac.cfg"
 
@@ -149,15 +131,18 @@ tools:
   flair_stringent: true
 
   # RNA modification detection - ELIGOS2
+  # Note: ELIGOS2 has a known CMH test failure (rpy2/R issue in Docker).
+  # The pipeline creates placeholder outputs when ELIGOS2 fails.
   eligos2_pval: 0.05
-  eligos2_oddR: 5
-  eligos2_esb: 0.2
+  eligos2_oddR: 2.5
+  eligos2_esb: 0.1
 
   # RNA modification detection - m6Anet
   m6anet_num_iterations: 1000
   m6anet_num_processors: 4
 
-  # Differential expression - DESeq2 (2x2 factorial)
+  # Differential expression - DESeq2 (2x2 factorial, additive model)
+  # Additive model used because anac017_1 x AA group has only 1 replicate
   deseq2_padj_threshold: 0.05
   deseq2_lfc_threshold: 1.0
 
@@ -167,7 +152,6 @@ tools:
 params:
   threads: 40
   latency_wait: 60
-  # m6Anet requires FAST5 data (~644 GB total, won't fit on 234 GB SSD)
-  # Set to true only when FAST5 data is available on local disk
-  # Alternatively, run per-sample: snakemake results/m6anet/SAMPLE_ID/data.site_proba.csv
+  # m6Anet requires FAST5 data on local disk.
+  # Set to true only if FAST5 data is available locally.
   run_m6anet: false
