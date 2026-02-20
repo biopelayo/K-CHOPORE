@@ -192,7 +192,7 @@ def main():
             consensus_sites[key] = info
 
     print(f"\n[K-CHOPORE] === Consensus Results ===")
-    print(f"[K-CHOPORE] Sites called by ≥{args.min_tools} tools: {len(consensus_sites)}")
+    print(f"[K-CHOPORE] Sites called by >={args.min_tools} tools: {len(consensus_sites)}")
 
     # Tool overlap statistics
     tool_counts = defaultdict(int)
