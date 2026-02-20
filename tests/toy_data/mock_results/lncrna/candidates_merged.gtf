@@ -1,0 +1,9 @@
+Chr1	FLAIR	transcript	1	800	.	+	.	transcript_id "MSTRG.1.1"; gene_id "MSTRG.1"; class_code "j";
+Chr1	FLAIR	exon	1	300	.	+	.	transcript_id "MSTRG.1.1"; gene_id "MSTRG.1"; exon_number "1";
+Chr1	FLAIR	exon	450	800	.	+	.	transcript_id "MSTRG.1.1"; gene_id "MSTRG.1"; exon_number "2";
+Chr1	FLAIR	transcript	200	850	.	+	.	transcript_id "MSTRG.2.1"; gene_id "MSTRG.2"; class_code "u";
+Chr1	FLAIR	exon	200	500	.	+	.	transcript_id "MSTRG.2.1"; gene_id "MSTRG.2"; exon_number "1";
+Chr1	FLAIR	exon	600	850	.	+	.	transcript_id "MSTRG.2.1"; gene_id "MSTRG.2"; exon_number "2";
+Chr2	FLAIR	transcript	50	470	.	-	.	transcript_id "MSTRG.3.1"; gene_id "MSTRG.3"; class_code "x";
+Chr2	FLAIR	exon	50	250	.	-	.	transcript_id "MSTRG.3.1"; gene_id "MSTRG.3"; exon_number "1";
+Chr2	FLAIR	exon	300	470	.	-	.	transcript_id "MSTRG.3.1"; gene_id "MSTRG.3"; exon_number "2";

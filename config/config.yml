@@ -147,11 +147,100 @@ tools:
   deseq2_lfc_threshold: 1.0
 
 # -------------------------------------------------------------
+# ANNOTATION BUNDLE (v3.0 modules)
+# Download with: bash scripts/download_annotations.sh
+# -------------------------------------------------------------
+annotations:
+  araport11_gff: "data/reference/annotations/Araport11_GFF3_genes_transposons.gff"
+  cantatadb_bed: "data/reference/annotations/CANTATAdb_v3_arabidopsis.bed"
+  mirbase_gff: "data/reference/annotations/miRBase_v22_ath.gff3"
+  mirbase_mature_fa: "data/reference/annotations/miRBase_v22_ath_mature.fa"
+  pmiren_fa: "data/reference/annotations/PmiREN_ath_miRNA.fa"
+  te_annotation: "data/reference/annotations/TAIR10_TE_annotation.bed"
+
+# -------------------------------------------------------------
+# SMALL RNA SAMPLES (Module 2 — Illumina sRNA-seq)
+# Enable run_smallrna and configure these when Illumina data is ready
+# Same 2x2 factorial design as DRS samples
+# -------------------------------------------------------------
+srna_samples: {}
+  # Example:
+  # WT_C_sRNA_R1:
+  #   genotype: "WT"
+  #   treatment: "C"
+  #   fastq: "data/raw/srna/WT_C_sRNA_R1.fastq.gz"
+
+# -------------------------------------------------------------
+# DEGRADOME / PARE SAMPLES (Module 3)
+# Used for experimental validation of miRNA-target interactions
+# -------------------------------------------------------------
+degradome_samples: {}
+  # Example:
+  # WT_C_PARE:
+  #   condition: "WT_C"
+  #   fastq: "data/raw/degradome/WT_C_PARE.fastq.gz"
+
+# -------------------------------------------------------------
+# EPITRANSCRIPTOMIC COMPARISONS (Module 4)
+# Define pairwise comparisons for differential modification
+# -------------------------------------------------------------
+epitx_comparisons:
+  - name: "treatment_WT"
+    control: ["WT_C_R1", "WT_C_R2", "WT_C_R3"]
+    treated: ["WT_AA_R1", "WT_AA_R2", "WT_AA_R3"]
+  - name: "genotype_control"
+    control: ["WT_C_R1", "WT_C_R2", "WT_C_R3"]
+    treated: ["anac017_1_C_R1", "anac017_1_C_R2", "anac017_1_C_R3"]
+
+# -------------------------------------------------------------
 # ANALYSIS PARAMETERS
 # -------------------------------------------------------------
 params:
   threads: 40
   latency_wait: 60
+
+  # --- v2.0 module toggles ---
   # m6Anet requires FAST5 data on local disk.
-  # Set to true only if FAST5 data is available locally.
   run_m6anet: false
+
+  # --- v3.0 ncRNA module toggles ---
+  run_lncrna: true           # Module 1: lncRNA discovery from DRS data
+  run_smallrna: false         # Module 2: Illumina sRNA-seq analysis (enable when data ready)
+  run_mirna_targets: false    # Module 3: miRNA target prediction + degradome (enable after Module 2)
+  run_epitx_enhanced: true    # Module 4: Enhanced epitranscriptomics (Nanocompore + consensus)
+  run_integration: false      # Module 5: Multi-omics data integration (enable after all modules)
+
+  # --- Module 1: lncRNA parameters ---
+  lncrna_min_length: 200       # Minimum transcript length (nt) for lncRNA candidates
+  lncrna_min_exons: 1          # 1=allow mono-exonic, 2=multi-exon only
+  lncrna_min_support: 3        # Minimum read support across samples
+  lncrna_max_orf_aa: 100       # TransDecoder ORF cutoff (aa)
+  lncrna_consensus_min: 2      # Min tools agreeing "non-coding" (out of FEELnc, CPC2, CPAT)
+  feelnc_mode: "shuffle"       # FEELnc training mode: "shuffle" or "intergenic"
+  cpat_threshold: 0.39         # Arabidopsis-specific CPAT coding probability cutoff
+
+  # --- Module 2: Small RNA parameters ---
+  srna_adapter: "auto"         # Adapter sequence or "auto" for auto-detection
+  srna_min_length: 18          # Minimum sRNA read length (nt)
+  srna_max_length: 30          # Maximum sRNA read length (nt)
+  shortstack_mincov: 5         # ShortStack minimum coverage
+  shortstack_dicermin: 20      # ShortStack minimum Dicer size
+  shortstack_dicermax: 24      # ShortStack maximum Dicer size
+  mirdeep_score_cutoff: 1      # miRDeep-P2 minimum score
+
+  # --- Module 3: Target prediction parameters ---
+  targetfinder_cutoff: 4.0     # TargetFinder score cutoff
+  psrnatarget_expectation: 3.0 # psRNATarget expectation value
+  degradome_category_max: 2    # Maximum T-plot category (0-4, lower = better)
+
+  # --- Module 4: Epitranscriptomics parameters ---
+  nanocompore_min_coverage: 30 # Minimum per-site read coverage for Nanocompore
+  nanocompore_pval: 0.05       # Nanocompore p-value threshold
+  epitx_consensus_min_tools: 2 # Minimum tools agreeing on modification site
+  epitx_run_remora: false      # Enable Remora/Dorado modification calling (requires FAST5+GPU)
+
+  # --- Module 5: Integration parameters ---
+  wgcna_soft_power: "auto"     # WGCNA soft-thresholding power (auto or integer)
+  wgcna_min_module_size: 30    # WGCNA minimum module size
+  cis_window_kb: 10            # lncRNA–gene cis-regulation window (kb)
+  population_vcf: ""           # Path to 1001 Genomes VCF (optional)

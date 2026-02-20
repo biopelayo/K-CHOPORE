@@ -208,6 +208,95 @@ RUN Rscript -e 'install.packages("BiocManager", repos="https://cloud.r-project.o
 RUN pip install --no-cache-dir flair-brookslab
 
 # ==============================================================
+# v3.0 MODULE 1: lncRNA Discovery Tools
+# ==============================================================
+
+# gffcompare + gffread (transcript classification + sequence extraction)
+RUN apt-get update && apt-get install -y gffread 2>/dev/null || \
+    (git clone https://github.com/gpertea/gffread.git /opt/gffread && \
+     cd /opt/gffread && make release && cp gffread /usr/local/bin/) && \
+    (git clone https://github.com/gpertea/gffcompare.git /opt/gffcompare && \
+     cd /opt/gffcompare && make release && cp gffcompare /usr/local/bin/) || true
+
+# TransDecoder (ORF prediction to filter coding transcripts)
+RUN git clone https://github.com/TransDecoder/TransDecoder.git /opt/TransDecoder && \
+    chmod +x /opt/TransDecoder/TransDecoder.LongOrfs /opt/TransDecoder/TransDecoder.Predict || true
+ENV PATH="/opt/TransDecoder:$PATH"
+
+# FEELnc (lncRNA classification: filter + codpot + classifier)
+RUN apt-get update && apt-get install -y cpanminus libdb-dev 2>/dev/null && \
+    cpanm Bio::Perl Bio::DB::Fasta Parallel::ForkManager 2>/dev/null || true && \
+    git clone https://github.com/tderber/FEELnc.git /opt/FEELnc || true
+ENV FEELNCPATH="/opt/FEELnc"
+ENV PATH="/opt/FEELnc/scripts:$PATH"
+ENV PERL5LIB="/opt/FEELnc/lib:$PERL5LIB"
+
+# CPC2 (coding potential calculator)
+RUN git clone https://github.com/gao-lab/CPC2_standalone.git /opt/cpc2 && \
+    cd /opt/cpc2 && chmod +x bin/CPC2.py 2>/dev/null || true
+ENV PATH="/opt/cpc2/bin:$PATH"
+
+# CPAT (coding potential assessment tool)
+RUN pip install --no-cache-dir CPAT || true
+
+# ==============================================================
+# v3.0 MODULE 2: Small RNA Analysis Tools
+# ==============================================================
+
+# cutadapt + Trim Galore (adapter trimming for Illumina sRNA-seq)
+RUN pip install --no-cache-dir cutadapt && \
+    wget -q -O /usr/local/bin/trim_galore \
+        "https://raw.githubusercontent.com/FelixKrueger/TrimGalore/master/trim_galore" && \
+    chmod +x /usr/local/bin/trim_galore || true
+
+# ShortStack v4 (sRNA locus annotation + MIRNA identification)
+RUN pip install --no-cache-dir ShortStack || \
+    (git clone https://github.com/MikeAxtworthy/ShortStack.git /opt/ShortStack && \
+     cd /opt/ShortStack && pip install --no-cache-dir .) || true
+
+# miRDeep-P2 (plant miRNA prediction)
+RUN git clone https://github.com/mhbrennan/miRDeep-P2.git /opt/mirdeep-p2 || true
+ENV PATH="/opt/mirdeep-p2:$PATH"
+
+# ==============================================================
+# v3.0 MODULE 3: miRNA Target Prediction Tools
+# ==============================================================
+
+# TargetFinder (plant miRNA target prediction)
+RUN git clone https://github.com/carringtonlab/TargetFinder.git /opt/targetfinder && \
+    chmod +x /opt/targetfinder/targetfinder.pl 2>/dev/null || true
+ENV PATH="/opt/targetfinder:$PATH"
+
+# CleaveLand4 (degradome / PARE analysis)
+RUN pip install --no-cache-dir cleaveland4 || \
+    (git clone https://github.com/MikeAxtworthy/CleaveLand4.git /opt/CleaveLand4 && \
+     cd /opt/CleaveLand4 && pip install --no-cache-dir .) || true
+
+# ==============================================================
+# v3.0 MODULE 4: Enhanced Epitranscriptomics Tools
+# ==============================================================
+
+# Nanocompore (differential RNA modification from nanopore)
+RUN pip install --no-cache-dir nanocompore || true
+
+# matplotlib + seaborn + upsetplot (visualization for reports)
+RUN pip install --no-cache-dir matplotlib seaborn upsetplot jinja2 || true
+
+# ==============================================================
+# v3.0 MODULE 5: Data Integration Tools
+# ==============================================================
+
+# WGCNA (weighted gene co-expression network analysis, R package)
+RUN Rscript -e 'if (!requireNamespace("WGCNA", quietly=TRUE)) BiocManager::install("WGCNA", ask=FALSE)' || true
+
+# bcftools (variant analysis for population context)
+RUN apt-get update && apt-get install -y bcftools 2>/dev/null || \
+    (wget -q https://github.com/samtools/bcftools/releases/download/1.21/bcftools-1.21.tar.bz2 && \
+     tar -xjf bcftools-1.21.tar.bz2 && cd bcftools-1.21 && \
+     ./configure --prefix=/usr/local && make -j$(nproc) && make install && \
+     cd .. && rm -rf bcftools-1.21*) || true
+
+# ==============================================================
 # 19b. Pin pandas/numpy for ELIGOS2 compatibility
 # ==============================================================
 # ELIGOS2 uses pd.concat with strings (fixed in pandas 1.x, breaks in 2.x)

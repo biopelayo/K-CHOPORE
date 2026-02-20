@@ -1,0 +1,4 @@
+transcript_id,transcript_position,n_reads,probability_modified,kmer,mod_ratio
+AT1G01010.1,85,45,0.92,GGACT,0.88
+AT1G01010.1,210,38,0.78,DRACH,0.72
+AT2G01010.1,45,52,0.95,AAACT,0.91

@@ -93,6 +93,23 @@ tools:
   deseq2_padj_threshold: 0.05
   deseq2_lfc_threshold: 1.0
 
+annotations:
+  araport11_gff: "tests/toy_data/annotations/toy_annotation.gtf"
+  cantatadb_bed: "tests/toy_data/annotations/cantata_test.bed"
+  mirbase_gff: "tests/toy_data/annotations/mirbase_test.gff3"
+  mirbase_mature_fa: "tests/toy_data/annotations/mirbase_mature_test.fa"
+  pmiren_fa: "tests/toy_data/annotations/pmiren_test.fa"
+  te_annotation: "tests/toy_data/annotations/te_test.bed"
+
+srna_samples: {}
+
+degradome_samples: {}
+
+epitx_comparisons:
+  - name: "test_comparison"
+    control: ["test_sample_1"]
+    treated: ["test_sample_2"]
+
 params:
   threads: 2
   latency_wait: 10
@@ -110,3 +127,45 @@ params:
   run_xpore: false
   run_deseq2: true
   run_multiqc: true
+
+  # v3.0 module toggles
+  run_lncrna: true
+  run_smallrna: false
+  run_mirna_targets: false
+  run_epitx_enhanced: true
+  run_integration: false
+
+  # Module 1 params
+  lncrna_min_length: 200
+  lncrna_min_exons: 1
+  lncrna_min_support: 1
+  lncrna_max_orf_aa: 100
+  lncrna_consensus_min: 2
+  feelnc_mode: "shuffle"
+  cpat_threshold: 0.39
+
+  # Module 2 params
+  srna_adapter: "auto"
+  srna_min_length: 18
+  srna_max_length: 30
+  shortstack_mincov: 5
+  shortstack_dicermin: 20
+  shortstack_dicermax: 24
+  mirdeep_score_cutoff: 1
+
+  # Module 3 params
+  targetfinder_cutoff: 4.0
+  psrnatarget_expectation: 3.0
+  degradome_category_max: 2
+
+  # Module 4 params
+  nanocompore_min_coverage: 30
+  nanocompore_pval: 0.05
+  epitx_consensus_min_tools: 2
+  epitx_run_remora: false
+
+  # Module 5 params
+  wgcna_soft_power: "auto"
+  wgcna_min_module_size: 30
+  cis_window_kb: 10
+  population_vcf: ""

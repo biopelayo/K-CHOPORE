@@ -1,0 +1,4 @@
+#ID	transcript_length	peptide_length	Fickett_score	pI	ORF_integrity	coding_probability	label
+MSTRG.1.1	800	50	0.85	6.2	complete	0.72	coding
+MSTRG.2.1	650	0	0.25	5.1	no_orf	0.08	noncoding
+MSTRG.3.1	420	20	0.35	7.0	internal	0.15	noncoding

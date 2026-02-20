@@ -1,0 +1,4 @@
+chrom	pos	strand	ref_base	depth	pval	oddR	esb	gene_id
+Chr1	85	+	A	105	0.003	7.2	0.06	AT1G01010
+Chr1	350	+	A	88	0.01	4.5	0.07	AT1G01010
+Chr2	45	+	A	92	0.008	5.8	0.04	AT2G01010

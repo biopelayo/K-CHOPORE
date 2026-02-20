@@ -306,3 +306,144 @@ The finalized pipeline successfully produced:
 *Pipeline: K-CHOPORE v1.0 | https://github.com/biopelayo/K-CHOPORE*
 *18 commits, 26 new files, 7 modified files | Feb 12-18, 2026*
 *Co-developed by Pelayo Gonzalez de Lena Rodriguez & Claude Opus 4.6*
+
+---
+---
+
+# K-CHOPORE v3.0 — Non-Coding RNA Expansion
+
+## Overview
+
+K-CHOPORE v3.0 expands the pipeline from a DRS-focused mRNA/isoform analysis tool into a comprehensive **non-coding RNA analysis platform**. Five new modules add lncRNA discovery, small RNA analysis, miRNA target prediction, enhanced epitranscriptomics, and multi-omics data integration.
+
+**v2.0 state:** 22 Snakemake rules, 730-line Snakefile, 51 tests, processing DRS data only.
+
+**v3.0 state:** 46 Snakemake rules (+24 new), ~1400-line Snakefile, 98 tests (+47 new), 10 new scripts, 12 new Docker tool installations, support for DRS + Illumina sRNA-seq + degradome data.
+
+---
+
+## New Modules
+
+### Module 1: lncRNA Discovery (7 rules)
+- **`lncrna_filter_candidates`** — Merges FLAIR isoform GTFs, classifies with gffcompare vs Araport11
+- **`lncrna_transdecoder`** — ORF prediction to exclude coding transcripts (>100aa cutoff)
+- **`lncrna_feelnc`** — FEELnc 3-step pipeline (filter → codpot → classifier)
+- **`lncrna_cpc2`** — CPC2 coding potential scoring
+- **`lncrna_cpat`** — CPAT with Arabidopsis-trained model (threshold 0.39)
+- **`lncrna_consensus`** — Consensus classification requiring ≥2/3 tools to agree "non-coding"
+- **`lncrna_deseq2`** — Differential expression of lncRNAs (reuses existing DESeq2 R script)
+
+New script: `scripts/lncrna_consensus.py` (~230 lines)
+
+### Module 2: Small RNA Analysis (5 rules)
+- **`srna_trim`** — Trim Galore adapter trimming (18-30nt filter)
+- **`srna_shortstack`** — ShortStack v4 sRNA locus discovery + MIRNA annotation
+- **`srna_mirdeep_p2`** — miRDeep-P2 novel miRNA prediction
+- **`srna_annotate_known`** — Cross-reference with miRBase + PmiREN databases
+- **`srna_counts_matrix`** — miRNA count matrix + size distribution plots
+
+New scripts: `scripts/annotate_mirna.py`, `scripts/srna_counts.py`
+
+### Module 3: miRNA Targets + Degradome (4 rules)
+- **`targets_prediction`** — TargetFinder plant miRNA target prediction
+- **`targets_psrnatarget`** — psRNATarget complementary prediction
+- **`degradome_validation`** — CleaveLand4 PARE/degradome validation
+- **`targets_integrate`** — Merge predictions + degradome + DE for evidence scoring
+
+New scripts: `scripts/predict_targets.py`, `scripts/integrate_targets.py`
+
+### Module 4: Enhanced Epitranscriptomics (3 rules)
+- **`nanocompore_run`** — Nanocompore differential modification detection
+- **`epitx_consensus`** — Multi-tool consensus (ELIGOS2 + m6Anet + Nanocompore)
+- **`epitx_report`** — HTML summary with tool overlap and biotype stratification
+
+New scripts: `scripts/epitx_consensus.py`, `scripts/epitx_report.py`
+
+### Module 5: Data Integration (4 rules)
+- **`wgcna_network`** — WGCNA co-expression network (mRNA + lncRNA + miRNA)
+- **`cis_regulation`** — lncRNA cis-regulatory pair identification (10kb window)
+- **`population_context`** — 1001 Genomes variant density in ncRNA loci
+- **`integration_report`** — Comprehensive HTML integration report
+
+New scripts: `scripts/run_wgcna.R`, `scripts/cis_regulation.py`, `scripts/integration_report.py`
+
+---
+
+## Infrastructure Changes
+
+### Config (`config/config.yml`)
+- Added `annotations:` section with 6 database paths (Araport11, CANTATAdb, miRBase, PmiREN, TE)
+- Added `srna_samples:` and `degradome_samples:` sections
+- Added `epitx_comparisons:` for pairwise modification analysis
+- Added 5 module toggles: `run_lncrna`, `run_smallrna`, `run_mirna_targets`, `run_epitx_enhanced`, `run_integration`
+- Added ~25 module-specific parameters (thresholds, cutoffs, window sizes)
+
+### Snakefile
+- Added 6 module toggle variables (`RUN_LNCRNA`, etc.)
+- Added `SRNA_SAMPLES`, `SRNA_SAMPLE_IDS`, `DEGRADOME_SAMPLES`, `EPITX_COMPARISONS`, `ANNOTATIONS`
+- Extended `rule all` with conditional targets for all 5 modules
+- 24 new rules organized by module with section headers
+- All new rules follow existing patterns: `mkdir -p`, `[K-CHOPORE]` logging, `> {log} 2>&1`
+
+### Dockerfile
+- Added 12 new tool installations organized by module:
+  - Module 1: gffread, gffcompare, TransDecoder, FEELnc, CPC2, CPAT
+  - Module 2: cutadapt, Trim Galore, ShortStack, miRDeep-P2
+  - Module 3: TargetFinder, CleaveLand4
+  - Module 4: Nanocompore, matplotlib, seaborn, upsetplot
+  - Module 5: WGCNA (R), bcftools
+- All new installations placed BEFORE pandas/numpy pin (critical build order)
+
+### Annotation Download Script
+- New `scripts/download_annotations.sh`: automated download of Araport11, CANTATAdb, miRBase, PmiREN, TAIR10 TE with checksums
+
+### Tests
+- 98 total tests (was 51)
+- New `tests/test_lncrna_module.py`: 12 tests (script imports, parser functions, config, rule presence)
+- New `tests/test_smallrna_module.py`: 17 tests (all 5 modules' rules, scripts, configs)
+- Updated `tests/test_config_validation.py`: v3.0 config validation (module toggles, annotations, params)
+- Updated `tests/test_snakefile_rules.py`: v3.0 rule counting, conditional targets, toggle variables
+- Updated `tests/test_snakefile_dag.py`: static analysis for all 46 rules
+
+---
+
+## Architecture Notes
+
+- **No existing rules modified** — only `rule all` and global variables extended
+- **Each module independently toggleable** — enable/disable without affecting others
+- **lncRNA DESeq2 reuses existing R script** — zero code duplication
+- **Chromosome naming inherited** — new rules use the same TAIR10↔AtRTDv2 harmonization
+- **Phased execution**: Phase A (lncRNA + Epitx, DRS data), Phase B (sRNA + Targets, Illumina), Phase C (Integration)
+
+---
+
+## Files Added/Modified
+
+| File | Action | Lines |
+|------|--------|-------|
+| `Snakefile` | Modified: +24 rules, module toggles | +700 |
+| `config/config.yml` | Modified: 5 module sections | +90 |
+| `Dockerfile` | Modified: 12 tool installations | +80 |
+| `scripts/download_annotations.sh` | **NEW** | ~150 |
+| `scripts/lncrna_consensus.py` | **NEW** | ~230 |
+| `scripts/annotate_mirna.py` | **NEW** | ~170 |
+| `scripts/srna_counts.py` | **NEW** | ~120 |
+| `scripts/predict_targets.py` | **NEW** | ~100 |
+| `scripts/integrate_targets.py` | **NEW** | ~170 |
+| `scripts/epitx_consensus.py` | **NEW** | ~200 |
+| `scripts/epitx_report.py` | **NEW** | ~160 |
+| `scripts/run_wgcna.R` | **NEW** | ~170 |
+| `scripts/cis_regulation.py` | **NEW** | ~170 |
+| `scripts/integration_report.py` | **NEW** | ~200 |
+| `tests/test_lncrna_module.py` | **NEW** | ~130 |
+| `tests/test_smallrna_module.py` | **NEW** | ~170 |
+| `tests/test_config_validation.py` | Rewritten for v3.0 | ~170 |
+| `tests/test_snakefile_rules.py` | Rewritten for v3.0 | ~170 |
+| `tests/test_snakefile_dag.py` | Rewritten for v3.0 | ~215 |
+| `tests/test_config.yml` | Updated with v3.0 sections | +45 |
+
+---
+
+*Pipeline: K-CHOPORE v3.0 | https://github.com/biopelayo/K-CHOPORE*
+*46 rules, 98 tests, 10 new scripts | Feb 2026*
+*Co-developed by Pelayo Gonzalez de Lena Rodriguez & Claude Opus 4.6*

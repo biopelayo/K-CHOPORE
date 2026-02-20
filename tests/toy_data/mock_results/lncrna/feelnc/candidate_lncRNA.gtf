@@ -1,0 +1,2 @@
+Chr1	FEELnc	transcript	200	850	.	+	.	transcript_id "MSTRG.2.1"; gene_id "MSTRG.2"; class_code "u"; FEELnc_biotype "lincRNA";
+Chr2	FEELnc	transcript	50	470	.	-	.	transcript_id "MSTRG.3.1"; gene_id "MSTRG.3"; class_code "x"; FEELnc_biotype "antisense";

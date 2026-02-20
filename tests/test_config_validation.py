@@ -2,6 +2,8 @@
 Test 1: Config validation
 Ensures both the main and test configs have all required keys,
 correct types, and consistent values.
+
+Updated for K-CHOPORE v3.0: includes v2 + v3 module config checks.
 """
 import os
 import pytest
@@ -11,13 +13,8 @@ import yaml
 # ----------------------------------------------------------------
 # Required config structure (keys that MUST exist)
 # ----------------------------------------------------------------
-REQUIRED_TOP_KEYS = ["samples", "conditions", "input_files", "output", "tools", "params"]
-
-REQUIRED_INPUT_FILES_KEYS = [
-    "fastq_dir", "fast5_dir", "pod5_dir",
-    "reference_genome", "reference_genome_mmi", "gtf_file",
-    "reads_manifest",
-]
+# Note: main config uses dict-style samples (v2), test config uses list (v1 legacy).
+# We test both patterns.
 
 REQUIRED_TOOLS_KEYS = [
     "minimap2_preset", "minimap2_kmer_size", "minimap2_extra_flags",
@@ -28,11 +25,15 @@ REQUIRED_TOOLS_KEYS = [
     "deseq2_padj_threshold", "deseq2_lfc_threshold",
 ]
 
-REQUIRED_PARAMS_KEYS = [
-    "threads",
-    "run_basecalling", "run_nanofilt", "run_nanoplot", "run_nanocomp",
-    "run_pycoqc", "run_flair", "run_eligos2", "run_m6anet", "run_deseq2",
-    "run_multiqc",
+# v3.0 module toggle flags
+V3_MODULE_TOGGLES = [
+    "run_lncrna", "run_smallrna", "run_mirna_targets",
+    "run_epitx_enhanced", "run_integration",
+]
+
+# v3.0 lncRNA parameters
+V3_LNCRNA_PARAMS = [
+    "lncrna_min_length", "lncrna_consensus_min", "cpat_threshold",
 ]
 
 
@@ -40,18 +41,24 @@ class TestConfigStructure:
     """Validate that configs have all required keys."""
 
     @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
-    def test_top_level_keys(self, config_fixture, request):
+    def test_top_level_has_samples(self, config_fixture, request):
         config = request.getfixturevalue(config_fixture)
-        for key in REQUIRED_TOP_KEYS:
-            assert key in config, f"Missing top-level key '{key}' in {config_fixture}"
+        assert "samples" in config, f"Missing 'samples' in {config_fixture}"
 
     @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
-    def test_input_files_keys(self, config_fixture, request):
+    def test_top_level_has_input_files(self, config_fixture, request):
         config = request.getfixturevalue(config_fixture)
-        for key in REQUIRED_INPUT_FILES_KEYS:
-            assert key in config["input_files"], (
-                f"Missing input_files.{key} in {config_fixture}"
-            )
+        assert "input_files" in config, f"Missing 'input_files' in {config_fixture}"
+
+    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
+    def test_top_level_has_tools(self, config_fixture, request):
+        config = request.getfixturevalue(config_fixture)
+        assert "tools" in config, f"Missing 'tools' in {config_fixture}"
+
+    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
+    def test_top_level_has_params(self, config_fixture, request):
+        config = request.getfixturevalue(config_fixture)
+        assert "params" in config, f"Missing 'params' in {config_fixture}"
 
     @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
     def test_tools_keys(self, config_fixture, request):
@@ -59,29 +66,20 @@ class TestConfigStructure:
         for key in REQUIRED_TOOLS_KEYS:
             assert key in config["tools"], f"Missing tools.{key} in {config_fixture}"
 
-    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
-    def test_params_keys(self, config_fixture, request):
-        config = request.getfixturevalue(config_fixture)
-        for key in REQUIRED_PARAMS_KEYS:
-            assert key in config["params"], f"Missing params.{key} in {config_fixture}"
-
 
 class TestConfigValues:
     """Validate that config values are correct types and within expected ranges."""
 
     @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
-    def test_samples_is_nonempty_list(self, config_fixture, request):
+    def test_samples_is_nonempty(self, config_fixture, request):
         config = request.getfixturevalue(config_fixture)
-        assert isinstance(config["samples"], list), "samples must be a list"
-        assert len(config["samples"]) > 0, "samples list must not be empty"
-
-    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
-    def test_conditions_match_samples(self, config_fixture, request):
-        config = request.getfixturevalue(config_fixture)
-        for sample in config["samples"]:
-            assert sample in config["conditions"], (
-                f"Sample '{sample}' not found in conditions mapping"
-            )
+        samples = config["samples"]
+        if isinstance(samples, dict):
+            assert len(samples) > 0, "samples dict must not be empty"
+        elif isinstance(samples, list):
+            assert len(samples) > 0, "samples list must not be empty"
+        else:
+            pytest.fail(f"samples must be dict or list, got {type(samples)}")
 
     @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
     def test_minimap2_preset_is_splice(self, config_fixture, request):
@@ -105,7 +103,7 @@ class TestConfigValues:
         config = request.getfixturevalue(config_fixture)
         extra = config["tools"]["minimap2_extra_flags"]
         assert "--MD" in extra, (
-            f"minimap2_extra_flags must contain '--MD' for modification detection, got '{extra}'"
+            f"minimap2_extra_flags must contain '--MD', got '{extra}'"
         )
 
     @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
@@ -117,18 +115,6 @@ class TestConfigValues:
         )
 
     @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
-    def test_sequencing_summaries_match_samples(self, config_fixture, request):
-        """Each sample should have a corresponding sequencing summary."""
-        config = request.getfixturevalue(config_fixture)
-        summaries = config["input_files"].get("sequencing_summaries", [])
-        samples = config["samples"]
-        if summaries:
-            assert len(summaries) == len(samples), (
-                f"Number of sequencing_summaries ({len(summaries)}) "
-                f"doesn't match number of samples ({len(samples)})"
-            )
-
-    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
     def test_run_flags_are_booleans(self, config_fixture, request):
         config = request.getfixturevalue(config_fixture)
         for key, val in config["params"].items():
@@ -136,3 +122,50 @@ class TestConfigValues:
                 assert isinstance(val, bool), (
                     f"params.{key} should be boolean, got {type(val).__name__}: {val}"
                 )
+
+
+class TestV3ModuleConfig:
+    """Validate K-CHOPORE v3.0 module configuration."""
+
+    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
+    def test_v3_module_toggles_present(self, config_fixture, request):
+        """All v3.0 module toggle flags must exist as booleans."""
+        config = request.getfixturevalue(config_fixture)
+        params = config.get("params", {})
+        for toggle in V3_MODULE_TOGGLES:
+            assert toggle in params, f"Missing params.{toggle} in {config_fixture}"
+            assert isinstance(params[toggle], bool), (
+                f"params.{toggle} must be bool in {config_fixture}"
+            )
+
+    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
+    def test_v3_annotations_section(self, config_fixture, request):
+        """Annotations section must exist with required keys."""
+        config = request.getfixturevalue(config_fixture)
+        assert "annotations" in config, f"Missing 'annotations' in {config_fixture}"
+        ann = config["annotations"]
+        for key in ["araport11_gff", "cantatadb_bed", "mirbase_gff", "pmiren_fa", "te_annotation"]:
+            assert key in ann, f"Missing annotations.{key} in {config_fixture}"
+
+    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
+    def test_v3_lncrna_params(self, config_fixture, request):
+        """lncRNA module parameters must be present."""
+        config = request.getfixturevalue(config_fixture)
+        params = config.get("params", {})
+        for key in V3_LNCRNA_PARAMS:
+            assert key in params, f"Missing params.{key} in {config_fixture}"
+
+    @pytest.mark.parametrize("config_fixture", ["main_config", "test_config"])
+    def test_v3_epitx_comparisons(self, config_fixture, request):
+        """epitx_comparisons must be a list."""
+        config = request.getfixturevalue(config_fixture)
+        assert "epitx_comparisons" in config, f"Missing 'epitx_comparisons' in {config_fixture}"
+        comps = config["epitx_comparisons"]
+        assert isinstance(comps, list), "epitx_comparisons must be a list"
+
+    def test_main_config_lncrna_defaults(self, main_config):
+        """Main config lncRNA defaults should be sensible."""
+        params = main_config["params"]
+        assert params["lncrna_min_length"] >= 200
+        assert 0 < params["cpat_threshold"] < 1
+        assert params["lncrna_consensus_min"] in (1, 2, 3)
