@@ -6,7 +6,7 @@ Just like the iconic Asturian **cachopo**, K-CHOPORE is a layered and satisfying
 ---
 <img width="1024" height="572" alt="image" src="https://github.com/user-attachments/assets/e66807c5-a076-4912-b40b-9fe9c7a1f327" />
 
-![image](https://github.com/user-attachments/assets/64bb5e93-3e63-4352-99a2-bd1ba350a670)
+
 
 
 ## Overview
