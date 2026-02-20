@@ -4,6 +4,7 @@
 Just like the iconic Asturian **cachopo**, K-CHOPORE is a layered and satisfying bioinformatics pipeline designed for analyzing **Nanopore direct RNA-seq** data with a focus on **epitranscriptomics**! Dive into the data feast, where each component works together to deliver high-quality, reproducible results.
 
 ---
+<img width="1024" height="572" alt="image" src="https://github.com/user-attachments/assets/e66807c5-a076-4912-b40b-9fe9c7a1f327" />
 
 ![image](https://github.com/user-attachments/assets/64bb5e93-3e63-4352-99a2-bd1ba350a670)
 
